@@ -10,19 +10,20 @@ open System.Collections.Generic
 //-------------------------------------- Initialization --------------------------------------//
 type ChordMessageTypes =
     | TotalNodes of int
-    | JoinRing
+    | JoinRing of int
     | FindSuccessor of int
     | InitializeRing
     | SetId of int
     | ConvergeRing
     | InitializeKeys of int
 
+let debug = true
 let numNodes = int (string (fsi.CommandLineArgs.GetValue 1))
 let numRequests = int(string (fsi.CommandLineArgs.GetValue 2))
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
 let mutable globalNodesDict = new Dictionary<int,IActorRef>()
-let nodeArray = new List<IActorRef>()
+let nodeList = ResizeArray()
 
 if numNodes <= 0 || numRequests <= 0 then
     printfn "Invalid input"
@@ -41,8 +42,6 @@ let nthroot n A =
 //-------------------------------------- Utils --------------------------------------//
 
 //-------------------------------------- Worker Actor --------------------------------------//
-    // Activate Gossip worker first initialize neighbour and then select a random node for Gossip
-
 let RingWorker (mailbox: Actor<_>) =
     let mutable nodeId = -1;
     let mutable succesor = numNodes;
@@ -53,8 +52,8 @@ let RingWorker (mailbox: Actor<_>) =
         match message with
         | SetId Id ->
             nodeId <- Id
-        | JoinRing ->
-            succesor <- succesorID
+        | JoinRing succesorId ->
+            succesor <- succesorId
         | _ -> ()
         return! loop()
     }            
@@ -74,16 +73,17 @@ let RingMaster(mailbox: Actor<_>) =
         match msg with 
             | TotalNodes n -> totalNumNodes <- n
             | InitializeRing ->
-                printfn "Intializing the ring"
+                if debug then printfn "Intializing the ring"
                 let key = "RingWorker0" 
                 let worker = spawn system (key) RingWorker
                 worker <! SetId 0
-                nodeArray.Add(worker)
+                nodeList.Add(worker)
                 globalNodesDict.Add(0, worker)
                 worker <! JoinRing numNodes
             | FindSuccessor nodeId ->
-                printfn "Node %i Requested to Join" nodeId
+                if debug then printfn "Node %i Requested to Join" nodeId
                 let successorId = [for id in nodeId .. numNodes do if globalNodesDict.ContainsKey id then yield id]
+                if debug then printfn "Found succesor %i for %i" successorId.[0] nodeId
                 response <! successorId
             | ConvergeRing ->
                 requestCount <- requestCount + 1
@@ -104,6 +104,7 @@ let master = spawn system "Master" RingMaster
 
 //-------------------------------------- Main Program --------------------------------------//
 stopWatch.Start()
+if debug then printfn "Starting execution"
 master <! TotalNodes(numNodes)
 master <! InitializeRing
 
@@ -112,17 +113,17 @@ for x in [1..numNodes] do
     let key: string = "RingWorker" + string(x)
     let worker = spawn system (key) RingWorker
     worker <! SetId x
-    nodeArray.Add(worker)
+    nodeList.Add(worker)
     globalNodesDict.Add(x, worker)
 
 // Select a random node and join it to ring
 for x in [1..numNodes] do
-    let rndNodeId = Random().Next(0, nodeArray.Count)
+    let rndNodeId = Random().Next(0, nodeList.Count)
     let worker = globalNodesDict.[rndNodeId] 
     let response =  (master <? FindSuccessor rndNodeId)
     let successorId = Async.RunSynchronously (response, 2500)
     worker <! JoinRing successorId 
-    nodeArray.RemoveAt(rndNodeId) |> ignore
+    nodeList.RemoveAt(rndNodeId) |> ignore
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
