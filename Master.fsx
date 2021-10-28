@@ -10,9 +10,9 @@ open System.Collections.Generic
 //-------------------------------------- Initialization --------------------------------------//
 type RingMasterMessage = 
     | NotifyMaster of int
-    | InitializeRing
-    | TotalNodes of int
+    | InitializeRing of int
     | FindSuccessor of int
+    | StabilizeRing
 
 type RingWorkerMessage =
     | JoinRing of int
@@ -68,7 +68,10 @@ let RingMaster(mailbox: Actor<_>) =
         let response = mailbox.Sender();
         try
         match msg with 
-            | TotalNodes n -> totalNumNodes <- n                
+            | InitializeRing n ->
+                printfn "Starting execution" 
+                totalNumNodes <- n
+                mailbox.Self <! StabilizeRing                
             | NotifyMaster nodeId ->
                 localNodeDict.Add(nodeId, true)
             | FindSuccessor nodeId ->
@@ -76,6 +79,12 @@ let RingMaster(mailbox: Actor<_>) =
                 let successorId = findSuccessor(nodeId, localNodeDict)
                 if debug then printfn "Found succesor %i for %i" successorId nodeId
                 response <! successorId
+            | StabilizeRing ->
+                async {
+                    if debug then printfn "Stabilizing the ring"
+                    do! Async.Sleep 2000
+                    mailbox.Self <! StabilizeRing
+                }
             | ConvergeRing ->
                 requestCount <- requestCount + 1
                 if requestCount = numRequests then
@@ -117,8 +126,7 @@ let RingWorker (mailbox: Actor<_>) =
 
 //-------------------------------------- Main Program --------------------------------------//
 stopWatch.Start()
-printfn "Starting execution"
-master <! TotalNodes(numNodes)
+master <! InitializeRing numNodes
 
 if debug then printfn "Intializing the ring"
 let key = "RingWorker0" 
