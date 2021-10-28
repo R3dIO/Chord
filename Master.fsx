@@ -24,7 +24,7 @@ let numRequests = fsi.CommandLineArgs.[2] |> int
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
 let mutable globalNodesDict = new Dictionary<int,IActorRef>()
-let nodeList = ResizeArray()
+let nodeList = ResizeArray([0])
 let debug = true
 
 if numNodes <= 0 || numRequests <= 0 then
@@ -48,11 +48,11 @@ if numNodes <= 0 || numRequests <= 0 then
 let findSuccessor (nodeId:int, nodeList:Dictionary<int,bool>) =
     let mutable flag = true
     let mutable succesor = 0
-    if nodeId <> numNodes then
-        for id in nodeId+1 .. numNodes do 
-            if nodeList.ContainsKey id && flag then
-                succesor <- id
-                flag <- false
+    for id in nodeId+1 .. numNodes do 
+        if nodeList.ContainsKey id && flag then
+            // if debug then printfn "found id %i" id
+            succesor <- id
+            flag <- false
     succesor 
 //-------------------------------------- Utils --------------------------------------//
 
@@ -108,7 +108,7 @@ let RingWorker (mailbox: Actor<_>) =
             nodeId <- Id
         | JoinRing succesorId ->
             succesor <- succesorId
-            master <! JoinRing nodeId
+            master <! NotifyMaster nodeId
         | _ -> ()
         return! loop()
     }            
@@ -124,7 +124,6 @@ if debug then printfn "Intializing the ring"
 let key = "RingWorker0" 
 let worker = spawn system (key) RingWorker
 worker <! SetId 0
-nodeList.Add(worker)
 globalNodesDict.Add(0, worker)
 worker <! JoinRing numNodes
 
@@ -133,14 +132,14 @@ for x in [1..numNodes] do
     let key: string = "RingWorker" + string(x)
     let worker = spawn system (key) RingWorker
     worker <! SetId x
-    nodeList.Add(worker)
+    nodeList.Add(x)
     globalNodesDict.Add(x, worker)
 
 // Select a random node and join it to ring
 for x in [1..numNodes] do
-    let rndNodeId = Random().Next(nodeList.Count)
-    let worker = globalNodesDict.[rndNodeId] 
-    let response =  (master <? FindSuccessor rndNodeId)
+    let rndNodeId = Random().Next(1,nodeList.Count)
+    let worker = globalNodesDict.[nodeList.[rndNodeId]] 
+    let response =  (master <? FindSuccessor nodeList.[rndNodeId])
     let successorId = Async.RunSynchronously (response, 2500)
     worker <! JoinRing successorId 
     nodeList.RemoveAt(rndNodeId) |> ignore
