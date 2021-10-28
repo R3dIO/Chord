@@ -9,14 +9,14 @@ open System.Collections.Generic
 
 //-------------------------------------- Initialization --------------------------------------//
 type RingMasterMessage = 
-    | JoinRing of int
+    | NotifyMaster of int
     | InitializeRing
     | TotalNodes of int
+    | FindSuccessor of int
 
 type RingWorkerMessage =
-    | FindSuccessor of int
+    | JoinRing of int
     | SetId of int
-    | ConvergeRing
     | InitializeKeys of int
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
@@ -25,6 +25,7 @@ let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
 let mutable globalNodesDict = new Dictionary<int,IActorRef>()
 let nodeList = ResizeArray()
+let debug = true
 
 if numNodes <= 0 || numRequests <= 0 then
     printfn "Invalid input"
@@ -43,48 +44,37 @@ if numNodes <= 0 || numRequests <= 0 then
 //-------------------------------------- Utils --------------------------------------//
 
 //-------------------------------------- Worker Actor --------------------------------------//
-let RingWorker (mailbox: Actor<_>) =
-    let mutable nodeId = -1;
-    let mutable succesor = numNodes;
-    let mutable predecessor = -1;
 
-    let rec loop()= actor{
-        let! message = mailbox.Receive();
-        match message with
-        | SetId Id ->
-            nodeId <- Id
-        | JoinRing succesorId ->
-            succesor <- succesorId
-        | _ -> ()
-        return! loop()
-    }            
-    loop()
-//-------------------------------------- Worker Actor --------------------------------------//
+let findSuccessor (nodeId:int, nodeList:Dictionary<int,bool>) =
+    let mutable flag = true
+    let mutable succesor = 0
+    if nodeId <> numNodes then
+        for id in nodeId+1 .. numNodes do 
+            if nodeList.ContainsKey id && flag then
+                succesor <- id
+                flag <- false
+    succesor 
+//-------------------------------------- Utils --------------------------------------//
 
 //-------------------------------------- Master Actor --------------------------------------//
 let RingMaster(mailbox: Actor<_>) =
     
     let mutable requestCount = 0
     let mutable totalNumNodes = 0
+    let mutable localNodeDict = new Dictionary<int,bool>()
 
     let rec loop()= actor{
         let! msg = mailbox.Receive();
         let response = mailbox.Sender();
         try
-            match msg with 
-            | TotalNodes n -> totalNumNodes <- n
-            | InitializeRing ->
-                printfn "Intializing the ring"
-                let key = "RingWorker0" 
-                let worker = spawn system (key) RingWorker
-                worker <! SetId 0
-                nodeList.Add(worker)
-                globalNodesDict.Add(0, worker)
-                worker <! JoinRing numNodes
+        match msg with 
+            | TotalNodes n -> totalNumNodes <- n                
+            | NotifyMaster nodeId ->
+                localNodeDict.Add(nodeId, true)
             | FindSuccessor nodeId ->
-                printfn "Node %i Requested to Join" nodeId
-                let successorId = [for id in nodeId .. numNodes do if globalNodesDict.ContainsKey id then yield id]
-                printfn "Found succesor %i for %i" successorId.[0] nodeId
+                if debug then printfn "Node %i Requested to Join" nodeId
+                let successorId = findSuccessor(nodeId, localNodeDict)
+                if debug then printfn "Found succesor %i for %i" successorId nodeId
                 response <! successorId
             | ConvergeRing ->
                 requestCount <- requestCount + 1
@@ -103,11 +93,40 @@ let RingMaster(mailbox: Actor<_>) =
 let master = spawn system "Master" RingMaster
 //-------------------------------------- Master Actor --------------------------------------//
 
+//-------------------------------------- Worker Actor --------------------------------------//
+let RingWorker (mailbox: Actor<_>) =
+    let mutable nodeId = -1;
+    let mutable succesor = numNodes;
+    let mutable predecessor = -1;
+    let mutable fingerTable = [||]
+    fingerTable <- Array.zeroCreate (numNodes + 1)
+
+    let rec loop()= actor{
+        let! message = mailbox.Receive();
+        match message with
+        | SetId Id ->
+            nodeId <- Id
+        | JoinRing succesorId ->
+            succesor <- succesorId
+            master <! JoinRing nodeId
+        | _ -> ()
+        return! loop()
+    }            
+    loop()
+//-------------------------------------- Worker Actor --------------------------------------//
+
 //-------------------------------------- Main Program --------------------------------------//
 stopWatch.Start()
 printfn "Starting execution"
 master <! TotalNodes(numNodes)
-master <! InitializeRing
+
+if debug then printfn "Intializing the ring"
+let key = "RingWorker0" 
+let worker = spawn system (key) RingWorker
+worker <! SetId 0
+nodeList.Add(worker)
+globalNodesDict.Add(0, worker)
+worker <! JoinRing numNodes
 
 // Create nodes that will become part of ring
 for x in [1..numNodes] do
@@ -119,7 +138,7 @@ for x in [1..numNodes] do
 
 // Select a random node and join it to ring
 for x in [1..numNodes] do
-    let rndNodeId = Random().Next(0, nodeList.Count)
+    let rndNodeId = Random().Next(nodeList.Count)
     let worker = globalNodesDict.[rndNodeId] 
     let response =  (master <? FindSuccessor rndNodeId)
     let successorId = Async.RunSynchronously (response, 2500)
