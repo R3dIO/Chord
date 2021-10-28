@@ -18,6 +18,7 @@ type RingWorkerMessage =
     | JoinRing of int
     | SetId of int
     | InitializeKeys of int
+    | MarkPredecessor of int
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequests = fsi.CommandLineArgs.[2] |> int
@@ -115,8 +116,12 @@ let RingWorker (mailbox: Actor<_>) =
         match message with
         | SetId Id ->
             nodeId <- Id
+        | MarkPredecessor predecessorId ->
+            // if debug then printfn "Marking %i as predecessor for %i" predecessorId nodeId
+            predecessor <- predecessorId
         | JoinRing succesorId ->
             succesor <- succesorId
+            globalNodesDict.[succesorId] <! MarkPredecessor nodeId
             master <! NotifyMaster nodeId
         | _ -> ()
         return! loop()
