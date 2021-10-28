@@ -13,12 +13,15 @@ type RingMasterMessage =
     | InitializeRing of int
     | FindSuccessor of int
     | StabilizeRing
+    | ConvergeRing
 
 type RingWorkerMessage =
     | JoinRing of int
     | SetId of int
     | InitializeKeys of int
     | MarkPredecessor of int
+    | StabilizeNode
+    | GetPredecessor
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequests = fsi.CommandLineArgs.[2] |> int
@@ -81,11 +84,13 @@ let RingMaster(mailbox: Actor<_>) =
                 if debug then printfn "Found succesor %i for %i" successorId nodeId
                 response <! successorId
             | StabilizeRing ->
-                async {
-                    if debug then printfn "Stabilizing the ring"
-                    do! Async.Sleep 2000
-                    mailbox.Self <! StabilizeRing
-                }
+                for node in globalNodesDict do
+                    printfn "%A" node
+                // let! recall = async {
+                //     if debug then printfn "Stabilizing the ring"
+                //     do! Async.Sleep 2000
+                //     mailbox.Self <! StabilizeRing
+                // }
             | ConvergeRing ->
                 requestCount <- requestCount + 1
                 if requestCount = numRequests then
@@ -95,7 +100,7 @@ let RingMaster(mailbox: Actor<_>) =
                     Environment.Exit(0)
             | _ -> ()
         with
-            | :? System.IndexOutOfRangeException -> printfn "Tried to access outside array!" |> ignore
+            | :? System.IndexOutOfRangeException -> printfn "ERROR: Tried to access outside array!" |> ignore
         return! loop()
     }            
     loop()
@@ -113,16 +118,31 @@ let RingWorker (mailbox: Actor<_>) =
 
     let rec loop()= actor{
         let! message = mailbox.Receive();
+        let response = mailbox.Sender();
+       
         match message with
         | SetId Id ->
             nodeId <- Id
+        | GetPredecessor ->
+            response <! predecessor
+        | StabilizeNode ->
+            try
+                let predecessorIdResp = (globalNodesDict.[succesor] <? GetPredecessor)
+                let nextNodePredecessor = Async.RunSynchronously (predecessorIdResp, 2500)
+                if nextNodePredecessor <> nodeId then
+                    succesor <- nextNodePredecessor
+            with 
+                | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
         | MarkPredecessor predecessorId ->
             // if debug then printfn "Marking %i as predecessor for %i" predecessorId nodeId
             predecessor <- predecessorId
         | JoinRing succesorId ->
-            succesor <- succesorId
-            globalNodesDict.[succesorId] <! MarkPredecessor nodeId
-            master <! NotifyMaster nodeId
+            try 
+                succesor <- succesorId
+                globalNodesDict.[succesorId] <! MarkPredecessor nodeId
+                master <! NotifyMaster nodeId
+            with 
+                | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
         | _ -> ()
         return! loop()
     }            
@@ -154,7 +174,7 @@ for x in [1..numNodes] do
     let worker = globalNodesDict.[nodeList.[rndNodeId]] 
     let response =  (master <? FindSuccessor nodeList.[rndNodeId])
     let successorId = Async.RunSynchronously (response, 2500)
-    worker <! JoinRing successorId 
+    worker <! JoinRing successorId
     nodeList.RemoveAt(rndNodeId) |> ignore
 
 Console.ReadLine() |> ignore
