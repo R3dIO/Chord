@@ -1,4 +1,3 @@
-
 #r "nuget: Akka.FSharp" 
 #r "nuget: Akka.TestKit" 
 
@@ -49,8 +48,8 @@ if numNodes <= 0 || numRequests <= 0 then
 
 let rec divideLoop nodeSize =
     let  mutable tableSize = 0
-    if nodeSize > 0 then
-        tableSize <- divideLoop(nodeSize/2)
+    if nodeSize > 1 then 
+        tableSize <- divideLoop (nodeSize / 2)
     tableSize + 1
 
 let fingerTableSize = divideLoop numNodes
@@ -141,7 +140,7 @@ let RingWorker (mailbox: Actor<_>) =
                 predecessor <- predecessorId
             | InitializeFingerTable ->
                 if debug then printfn "Initializing Finger Table for %i" nodeId
-                printfn "%i" fingerTableSize
+                printfn "Finger table size %i" fingerTableSize
                 let requestList = []
                 for i in [0..fingerTableSize] do
                     let response =  (master <? FindSuccessor (nodeId + (pown 2 i)) )
@@ -163,7 +162,7 @@ let RingWorker (mailbox: Actor<_>) =
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
             | _ -> ()
         return! loop()
-    }            
+    }   
     loop()
 //-------------------------------------- Worker Actor --------------------------------------//
 
@@ -191,7 +190,7 @@ for x in [1..numNodes] do
     let rndNodeId = Random().Next(1,nodeList.Count)
     let worker = globalNodesDict.[nodeList.[rndNodeId]] 
     let response =  (master <? FindSuccessor nodeList.[rndNodeId])
-    let successorId = Async.RunSynchronously (response, 2500)
+    let successorId = Async.RunSynchronously (response, 10000)
     worker <! JoinRing successorId
     nodeList.RemoveAt(rndNodeId) |> ignore
 
