@@ -37,15 +37,6 @@ if numNodes <= 0 || numRequests <= 0 then
 //-------------------------------------- Initialization --------------------------------------//
 
 //-------------------------------------- Utils --------------------------------------//
-// let nthroot n A =
-//     let rec f x =
-//         let m = n - 1.
-//         let x' = (m * x + A/x**m) / n
-//         match abs(x' - x) with
-//         | t when t < abs(x * 1e-9) -> x'
-//         | _ -> f x'
-//     f (A / double n)
-
 let rec divideLoop nodeSize =
     let mutable tableSize = nodeSize
     let mutable count = 0
@@ -168,6 +159,7 @@ let RingWorker (mailbox: Actor<_>) =
                         succesor <- nextNodePredecessor
                 with 
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
+                    | :?  System.TimeoutException ->  printfn "ERROR: Unable to StabilizeNode RTO" |> ignore
             | _ -> ()
         return! loop()
     }   
