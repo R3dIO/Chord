@@ -46,7 +46,6 @@ let rec divideLoop nodeSize =
     count    
 
 let fingerTableSize = divideLoop numNodes
-printf "fingertablesize %i" fingerTableSize
 //-------------------------------------- Utils --------------------------------------//
 
 //-------------------------------------- Worker Actor --------------------------------------//
@@ -154,7 +153,7 @@ let RingWorker (mailbox: Actor<_>) =
             | StabilizeNode ->
                 try
                     let predecessorIdResp = (globalNodesDict.[succesor] <? GetPredecessor)
-                    let nextNodePredecessor = Async.RunSynchronously (predecessorIdResp, 5000)
+                    let nextNodePredecessor = Async.RunSynchronously (predecessorIdResp)
                     if nextNodePredecessor <> nodeId then
                         succesor <- nextNodePredecessor
                 with 
@@ -170,7 +169,7 @@ let RingWorker (mailbox: Actor<_>) =
 stopWatch.Start()
 master <! InitializeRing numNodes
 
-if debug then printfn "Intializing the ring"
+if debug then printfn "Intializing the ring for %i nodes and Fingertable size %i" numNodes fingerTableSize
 let key = "RingWorker0" 
 let worker = spawn system (key) RingWorker
 worker <! SetNodeId 0
