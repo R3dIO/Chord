@@ -91,8 +91,10 @@ let RingMaster(mailbox: Actor<_>) =
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
                         worker <! StabilizeNode
+                    let delay = async { do! Async.Sleep(5000) }
+                    Async.RunSynchronously(delay)
                     // Async.Sleep 2000 |> Async.RunSynchronously
-                    // mailbox.Self <! StabilizeRing
+                    mailbox.Self <! StabilizeRing
                 | ConvergeRing ->
                     requestCount <- requestCount + 1
                     if requestCount = numRequests then
