@@ -13,6 +13,7 @@ type RingMasterMessage =
     | FindSuccessor of int
     | StabilizeRing
     | ConvergeRing
+    | GetRingList
 
 type RingWorkerMessage =
     | JoinRing of int
@@ -84,6 +85,8 @@ let RingMaster(mailbox: Actor<_>) =
                     let successorId = findSuccessor(nodeId, localNodeDict)
                     if debug then printfn "INFO: Found succesor %i for %i" successorId nodeId
                     response <! successorId
+                | GetRingList ->
+                    response <! localNodeDict
                 | StabilizeRing ->
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
@@ -134,22 +137,14 @@ let RingWorker (mailbox: Actor<_>) =
                 predecessor <- predecessorId
             | InitializeFingerTable ->
                 if debug then printfn "INFO: Initializing Finger Table for %i" nodeId
-                let requestList = []
-                for i in [0..fingerTableSize] do
-                    let nextEntry = nodeId + (pown 2 i)
+                let response = (master <? GetRingList)
+                let nodeList = Async.RunSynchronously response
+                for exponent in [0..fingerTableSize] do
+                    let nextEntry = nodeId + (pown 2 exponent) - 1
                     if (nextEntry <= numNodes) then
-                        let response =  (master <? FindSuccessor )
-                        List.append requestList [response] |> ignore
-                try
-                    requestList 
-                        |> Async.Parallel
-                        |> Async.RunSynchronously
-                        |> ignore
-                with 
-                    | :?  System.TimeoutException ->  printfn "ERROR: Unable to resolve all fingertable request" |> ignore
-                for successorId in requestList do
-                    fingerTable.Add(successorId, globalNodesDict.[successorId])
-                for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i and Value %A" nodeId entry.Key entry.Value
+                        let successorId = findSuccessor(nextEntry, nodeList)
+                        fingerTable.Add(successorId, globalNodesDict.[successorId])
+                if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
             | StabilizeNode ->
                 try
                     let predecessorIdResp = (globalNodesDict.[succesor] <? GetPredecessor)
