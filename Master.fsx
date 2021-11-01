@@ -157,8 +157,8 @@ let RingWorker (mailbox: Actor<_>) =
                     if (nextEntry <= numNodes) then
                         let successorId = findSuccessor(nextEntry, nodeList)
                         fingerTable.Add(successorId, globalNodesDict.[successorId])
-                if not (fingerTable.ContainsKey(0)) then fingerTable.Add(0, globalNodesDict.[0])
-                
+                if not (fingerTable.ContainsKey(0)) && not (nodeId = 0) then 
+                    fingerTable.Add(0, globalNodesDict.[0])
                 if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
             | DistributeKeys globalKeysList ->
                 printfn "keys list length %i for node %i" globalKeysList.Length nodeId
@@ -196,7 +196,7 @@ let key = "RingWorker0"
 let worker = spawn system (key) RingWorker
 worker <! SetNodeId 0
 globalNodesDict.Add(0, worker)
-worker <! JoinRing numNodes
+// worker <! JoinRing numNodes
 
 // Create nodes that will become part of ring
 for nodeId in [1..numNodes] do
@@ -207,9 +207,9 @@ for nodeId in [1..numNodes] do
     globalNodesDict.Add(nodeId, worker)
 
 // Generating a ring linearly
-for node in [numNodes .. 1] do
+for node in [numNodes .. -1 .. 1] do
     let worker = globalNodesDict.[node] 
-    let successorId = Async.RunSynchronously (master <? FindSuccessor node) 10000
+    let successorId = Async.RunSynchronously (master <? FindSuccessor node)
     worker <! JoinRing successorId
 
 master <! StabilizeRing
