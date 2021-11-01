@@ -31,7 +31,7 @@ let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
 let mutable globalNodesDict = new Dictionary<int,IActorRef>()
 let nodeList = ResizeArray([0])
-let debug = false
+let debug = true
 
 if numNodes <= 0 || numRequestsPerNode <= 0 then
     printfn "Invalid input"
@@ -47,11 +47,6 @@ let rec divideLoop nodeSize =
         count <- count + 1
     count    
 
-let fingerTableSize = divideLoop numNodes
-//-------------------------------------- Utils --------------------------------------//
-
-//-------------------------------------- Worker Actor --------------------------------------//
-
 let findSuccessor (nodeId:int, nodeList:Dictionary<int,_>) =
     let mutable flag = true
     let mutable succesor = 0
@@ -62,6 +57,19 @@ let findSuccessor (nodeId:int, nodeList:Dictionary<int,_>) =
                 succesor <- id
                 flag <- false
     succesor 
+
+let RandomJoin(maxNodes:int, master:IActorRef) = 
+    // Select a random node and join it to ring
+    for x in [1..maxNodes] do
+        let rndNodeId = Random().Next(1,nodeList.Count)
+        let worker = globalNodesDict.[nodeList.[rndNodeId]] 
+        let response =  (master <? FindSuccessor nodeList.[rndNodeId])
+        let successorId = Async.RunSynchronously (response, 10000)
+        worker <! JoinRing successorId
+        nodeList.RemoveAt(rndNodeId) |> ignore
+
+let fingerTableSize = divideLoop numNodes
+
 //-------------------------------------- Utils --------------------------------------//
 
 //-------------------------------------- Master Actor --------------------------------------//
@@ -153,14 +161,14 @@ let RingWorker (mailbox: Actor<_>) =
                 
                 if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
             | DistributeKeys globalKeysList ->
-                // printfn "keys list length %i for node %i" globalKeysList.Length nodeId
+                printfn "keys list length %i for node %i" globalKeysList.Length nodeId
                 let mutable newKeyList =  new ResizeArray<_>()
                 for key in globalKeysList do
                     if (key % numNodes) <= nodeId then
                         keysList.Add(key)
                     else    
                         newKeyList.Add(key)
-                // printfn "keys list length after processsing %i for node %i" newKeyList.Count succesor
+                printfn "keys list length after processsing %i for node %i" newKeyList.Count succesor
                 if newKeyList.Count > 0 then
                     globalNodesDict.[succesor] <! DistributeKeys (Seq.toList newKeyList)
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i" nodeId keysList.Count 
@@ -191,21 +199,18 @@ globalNodesDict.Add(0, worker)
 worker <! JoinRing numNodes
 
 // Create nodes that will become part of ring
-for x in [1..numNodes] do
-    let key: string = "RingWorker" + string(x)
+for nodeId in [1..numNodes] do
+    let key: string = "RingWorker" + string(nodeId)
     let worker = spawn system (key) RingWorker
-    worker <! SetNodeId x
-    nodeList.Add(x)
-    globalNodesDict.Add(x, worker)
+    worker <! SetNodeId nodeId
+    nodeList.Add(nodeId)
+    globalNodesDict.Add(nodeId, worker)
 
-// Select a random node and join it to ring
-for x in [1..numNodes] do
-    let rndNodeId = Random().Next(1,nodeList.Count)
-    let worker = globalNodesDict.[nodeList.[rndNodeId]] 
-    let response =  (master <? FindSuccessor nodeList.[rndNodeId])
-    let successorId = Async.RunSynchronously (response, 10000)
+// Generating a ring linearly
+for node in [numNodes .. 1] do
+    let worker = globalNodesDict.[node] 
+    let successorId = Async.RunSynchronously (master <? FindSuccessor node) 10000
     worker <! JoinRing successorId
-    nodeList.RemoveAt(rndNodeId) |> ignore
 
 master <! StabilizeRing
 
