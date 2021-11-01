@@ -31,7 +31,7 @@ let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
 let mutable globalNodesDict = new Dictionary<int,IActorRef>()
 let nodeList = ResizeArray([0])
-let debug = false
+let debug = true
 
 if numNodes <= 0 || numRequestsPerNode <= 0 then
     printfn "Invalid input"
@@ -103,6 +103,7 @@ let RingMaster(mailbox: Actor<_>) =
                 | StabilizeRing ->
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
+                        printfn "Inside ------------------------- %i" key
                         worker <! StabilizeNode
                     let delay = async { do! Async.Sleep(2000) }
                     Async.RunSynchronously(delay)
@@ -191,6 +192,7 @@ let RingWorker (mailbox: Actor<_>) =
                     if (nextNodePredecessor <> -1) && (nextNodePredecessor <> nodeId) then
                         printfn "INFO: Updating succesor for %i with %i" nodeId nextNodePredecessor
                         succesor <- nextNodePredecessor
+                        globalNodesDict.[succesor] <! MarkPredecessor nodeId
                 with 
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
                     | :?  System.TimeoutException ->  printfn "ERROR: Unable to StabilizeNode RTO" |> ignore
