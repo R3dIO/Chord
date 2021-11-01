@@ -24,7 +24,6 @@ type RingWorkerMessage =
     | StabilizeNode
     | GetPredecessor
     | DistributeKeys of list<int>
-    | SaveKeys of int
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequests = fsi.CommandLineArgs.[2] |> int
@@ -95,7 +94,6 @@ let RingMaster(mailbox: Actor<_>) =
                         worker <! StabilizeNode
                     let delay = async { do! Async.Sleep(5000) }
                     Async.RunSynchronously(delay)
-                    // Async.Sleep 2000 |> Async.RunSynchronously
                     mailbox.Self <! StabilizeRing
                 | ConvergeRing ->
                     requestCount <- requestCount + 1
@@ -119,7 +117,7 @@ let RingWorker (mailbox: Actor<_>) =
     let mutable nodeId = -1;
     let mutable succesor = numNodes;
     let mutable predecessor = -1;
-    let mutable keysList = ResizeArray()
+    let mutable keysList = new ResizeArray<_>()
     let mutable fingerTable = new Dictionary<int,IActorRef>()
 
     let rec loop()= actor{
@@ -143,25 +141,27 @@ let RingWorker (mailbox: Actor<_>) =
             | InitializeFingerTable ->
                 if debug then printfn "INFO: Initializing Finger Table for %i" nodeId
                 let response = (master <? GetRingList)
-                let nodeList = Async.RunSynchronously response
+                let nodeList:Dictionary<int, bool> = Async.RunSynchronously response
+                
                 for exponent in [0..fingerTableSize] do
                     let mutable nextEntry = nodeId + (pown 2 exponent) - 1
                     // if nextEntry > numNodes then nextEntry <- nextEntry % numNodes
                     if (nextEntry <= numNodes) then
                         let successorId = findSuccessor(nextEntry, nodeList)
                         fingerTable.Add(successorId, globalNodesDict.[successorId])
-                fingerTable.Add(0, globalNodesDict.[0])
+                if not (fingerTable.ContainsKey(0)) then fingerTable.Add(0, globalNodesDict.[0])
+                
                 if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
-            | DistributeKeys newKeysList ->
-                for key in newKeysList do
-                    let nodeForKey = findSuccessor (key % numNodes, fingerTable)
-                    let isSaved = Async.RunSynchronously(fingerTable.[nodeForKey] <? SaveKeys key)
-                    if not isSaved then
+            | DistributeKeys globalKeysList ->
+                let mutable newKeyList =  new ResizeArray<_>()
+                for key in globalKeysList do
+                    if (key % numNodes) <= nodeId then
                         keysList.Add(key)
-            | SaveKeys key ->
-                if (key % numNodes) = nodeId then
-                    keysList.Add key
-                    response <! true
+                    else    
+                        newKeyList.Add(key)
+                if newKeyList.Count > 0 then
+                    globalNodesDict.[succesor] <! DistributeKeys (Seq.toList newKeyList)
+                if debug then printfn "INFO: Distributing keys at node %i and current key count %i" nodeId keysList.Count 
             | StabilizeNode ->
                 try
                     let predecessorIdResp = (globalNodesDict.[succesor] <? GetPredecessor)
