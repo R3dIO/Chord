@@ -22,7 +22,8 @@ type RingWorkerMessage =
     | MarkPredecessor of int
     | InitializeFingerTable
     | StabilizeNode
-    | GetPredecessor
+    | GetPredecessor of IActorRef
+    | Notify of int
     | DistributeKeys of list<int>
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
@@ -51,7 +52,7 @@ let findSuccessor (nodeId:int, nodeList:Dictionary<int,_>) =
     let mutable flag = true
     let mutable succesor = 0
     if nodeId < numNodes then
-        for id in nodeId+1 .. numNodes do 
+        for id in nodeId .. numNodes do 
             if nodeList.ContainsKey id && flag then
                 // if debug then printfn "found id %i" id
                 succesor <- id
@@ -103,7 +104,6 @@ let RingMaster(mailbox: Actor<_>) =
                 | StabilizeRing ->
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
-                        printfn "Inside ------------------------- %i" key
                         worker <! StabilizeNode
                     let delay = async { do! Async.Sleep(2000) }
                     Async.RunSynchronously(delay)
@@ -130,7 +130,7 @@ let master = spawn system "Master" RingMaster
 //-------------------------------------- Worker Actor --------------------------------------//
 let RingWorker (mailbox: Actor<_>) =
     let mutable nodeId = -1;
-    let mutable succesor = 0;
+    let mutable succesor = -1;
     let mutable predecessor = -1;
     let mutable keysList = new ResizeArray<_>()
     let mutable fingerTable = new Dictionary<int,IActorRef>()
@@ -150,8 +150,8 @@ let RingWorker (mailbox: Actor<_>) =
                 with 
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
 
-            | GetPredecessor ->
-                response <! predecessor
+            | GetPredecessor requestor ->
+                requestor <! Notify predecessor
 
             | MarkPredecessor predecessorId ->
                 if debug then printfn "INFO: Marking %i as predecessor for %i" predecessorId nodeId
@@ -185,17 +185,14 @@ let RingWorker (mailbox: Actor<_>) =
                     globalNodesDict.[succesor] <! DistributeKeys (Seq.toList newKeyList)
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i" nodeId keysList.Count 
 
-            | StabilizeNode ->
-                try
-                    let nextNodePredecessor = Async.RunSynchronously (globalNodesDict.[succesor] <? GetPredecessor)
-                    printfn "INFO: Stabilizing node %i found predecessor %i" nodeId nextNodePredecessor
-                    if (nextNodePredecessor <> -1) && (nextNodePredecessor <> nodeId) then
-                        printfn "INFO: Updating succesor for %i with %i" nodeId nextNodePredecessor
-                        succesor <- nextNodePredecessor
-                        globalNodesDict.[succesor] <! MarkPredecessor nodeId
-                with 
-                    | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
-                    | :?  System.TimeoutException ->  printfn "ERROR: Unable to StabilizeNode RTO" |> ignore
+            | StabilizeNodeReq ->
+                globalNodesDict.[succesor] <? GetPredecessor mailbox.Self
+                
+            | Notify nextNodePredecessor ->      
+                if (nextNodePredecessor <> -1) && (nextNodePredecessor <> nodeId) then
+                    if debug then printfn "INFO: Updating succesor for %i with %i" nodeId nextNodePredecessor
+                    succesor <- nextNodePredecessor
+                    globalNodesDict.[succesor] <! MarkPredecessor nodeId
 
             | _ -> ()
         return! loop()
