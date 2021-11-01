@@ -21,7 +21,7 @@ type RingWorkerMessage =
     | InitializeKeys of int
     | MarkPredecessor of int
     | InitializeFingerTable
-    | StabilizeNode
+    | StabilizeNodeReq
     | GetPredecessor of IActorRef
     | Notify of int
     | DistributeKeys of list<int>
@@ -104,7 +104,7 @@ let RingMaster(mailbox: Actor<_>) =
                 | StabilizeRing ->
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
-                        worker <! StabilizeNode
+                        worker <! StabilizeNodeReq
                     let delay = async { do! Async.Sleep(2000) }
                     Async.RunSynchronously(delay)
                     mailbox.Self <! StabilizeRing
@@ -145,8 +145,8 @@ let RingWorker (mailbox: Actor<_>) =
             | JoinRing succesorId ->
                 try 
                     succesor <- succesorId
-                    globalNodesDict.[succesorId] <! MarkPredecessor nodeId
                     master <! NotifyMaster nodeId
+                    globalNodesDict.[succesorId] <! MarkPredecessor nodeId
                 with 
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
 
@@ -168,6 +168,7 @@ let RingWorker (mailbox: Actor<_>) =
                     if (nextEntry <= numNodes) then
                         let successorId = findSuccessor(nextEntry, nodeList)
                         fingerTable.Add(successorId, globalNodesDict.[successorId])
+
                 if not (fingerTable.ContainsKey(0)) && nodeId <> 0 then 
                     fingerTable.Add(0, globalNodesDict.[0])
                 if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
@@ -189,7 +190,7 @@ let RingWorker (mailbox: Actor<_>) =
                 globalNodesDict.[succesor] <? GetPredecessor mailbox.Self
                 
             | Notify nextNodePredecessor ->      
-                if (nextNodePredecessor <> -1) && (nextNodePredecessor <> nodeId) then
+                if (nextNodePredecessor <> -1) && (nextNodePredecessor > nodeId) then
                     if debug then printfn "INFO: Updating succesor for %i with %i" nodeId nextNodePredecessor
                     succesor <- nextNodePredecessor
                     globalNodesDict.[succesor] <! MarkPredecessor nodeId
@@ -226,11 +227,11 @@ for node in [numNodes .. -1 .. 1] do
 
 master <! StabilizeRing
 
-for KeyValue(key, worker) in globalNodesDict do
-    worker <! InitializeFingerTable
+// for KeyValue(key, worker) in globalNodesDict do
+//     worker <! InitializeFingerTable
 
-let keysList = [0 .. numNodes * numRequestsPerNode]
-globalNodesDict.[0] <! DistributeKeys keysList
+// let keysList = [0 .. numNodes * numRequestsPerNode]
+// globalNodesDict.[0] <! DistributeKeys keysList
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
