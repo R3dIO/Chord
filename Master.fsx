@@ -26,14 +26,14 @@ type RingWorkerMessage =
     | DistributeKeys of list<int>
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
-let numRequests = fsi.CommandLineArgs.[2] |> int
+let numRequestsPerNode = fsi.CommandLineArgs.[2] |> int
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
 let mutable globalNodesDict = new Dictionary<int,IActorRef>()
 let nodeList = ResizeArray([0])
-let debug = true
+let debug = false
 
-if numNodes <= 0 || numRequests <= 0 then
+if numNodes <= 0 || numRequestsPerNode <= 0 then
     printfn "Invalid input"
     Environment.Exit(0)
 //-------------------------------------- Initialization --------------------------------------//
@@ -92,12 +92,12 @@ let RingMaster(mailbox: Actor<_>) =
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
                         worker <! StabilizeNode
-                    let delay = async { do! Async.Sleep(5000) }
+                    let delay = async { do! Async.Sleep(7000) }
                     Async.RunSynchronously(delay)
                     mailbox.Self <! StabilizeRing
                 | ConvergeRing ->
                     requestCount <- requestCount + 1
-                    if requestCount = numRequests then
+                    if requestCount = numRequestsPerNode then
                         stopWatch.Stop()
                         printfn "Time for convergence: %f ms" stopWatch.Elapsed.TotalMilliseconds
                         printfn "------------- End Transfer -------------"
@@ -115,7 +115,7 @@ let master = spawn system "Master" RingMaster
 //-------------------------------------- Worker Actor --------------------------------------//
 let RingWorker (mailbox: Actor<_>) =
     let mutable nodeId = -1;
-    let mutable succesor = numNodes;
+    let mutable succesor = 0;
     let mutable predecessor = -1;
     let mutable keysList = new ResizeArray<_>()
     let mutable fingerTable = new Dictionary<int,IActorRef>()
@@ -153,12 +153,14 @@ let RingWorker (mailbox: Actor<_>) =
                 
                 if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
             | DistributeKeys globalKeysList ->
+                // printfn "keys list length %i for node %i" globalKeysList.Length nodeId
                 let mutable newKeyList =  new ResizeArray<_>()
                 for key in globalKeysList do
                     if (key % numNodes) <= nodeId then
                         keysList.Add(key)
                     else    
                         newKeyList.Add(key)
+                // printfn "keys list length after processsing %i for node %i" newKeyList.Count succesor
                 if newKeyList.Count > 0 then
                     globalNodesDict.[succesor] <! DistributeKeys (Seq.toList newKeyList)
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i" nodeId keysList.Count 
@@ -209,6 +211,9 @@ master <! StabilizeRing
 
 for KeyValue(key, worker) in globalNodesDict do
     worker <! InitializeFingerTable
+
+let keysList = [0 .. numNodes * numRequestsPerNode]
+globalNodesDict.[0] <! DistributeKeys keysList
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
