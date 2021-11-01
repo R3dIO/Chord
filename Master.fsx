@@ -23,6 +23,8 @@ type RingWorkerMessage =
     | InitializeFingerTable
     | StabilizeNode
     | GetPredecessor
+    | DistributeKeys of list<int>
+    | SaveKeys of int
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequests = fsi.CommandLineArgs.[2] |> int
@@ -51,7 +53,7 @@ let fingerTableSize = divideLoop numNodes
 
 //-------------------------------------- Worker Actor --------------------------------------//
 
-let findSuccessor (nodeId:int, nodeList:Dictionary<int,bool>) =
+let findSuccessor (nodeId:int, nodeList:Dictionary<int,_>) =
     let mutable flag = true
     let mutable succesor = 0
     if nodeId < numNodes then
@@ -117,6 +119,7 @@ let RingWorker (mailbox: Actor<_>) =
     let mutable nodeId = -1;
     let mutable succesor = numNodes;
     let mutable predecessor = -1;
+    let mutable keysList = ResizeArray()
     let mutable fingerTable = new Dictionary<int,IActorRef>()
 
     let rec loop()= actor{
@@ -142,11 +145,23 @@ let RingWorker (mailbox: Actor<_>) =
                 let response = (master <? GetRingList)
                 let nodeList = Async.RunSynchronously response
                 for exponent in [0..fingerTableSize] do
-                    let nextEntry = nodeId + (pown 2 exponent) - 1
+                    let mutable nextEntry = nodeId + (pown 2 exponent) - 1
+                    // if nextEntry > numNodes then nextEntry <- nextEntry % numNodes
                     if (nextEntry <= numNodes) then
                         let successorId = findSuccessor(nextEntry, nodeList)
                         fingerTable.Add(successorId, globalNodesDict.[successorId])
+                fingerTable.Add(0, globalNodesDict.[0])
                 if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
+            | DistributeKeys newKeysList ->
+                for key in newKeysList do
+                    let nodeForKey = findSuccessor (key % numNodes, fingerTable)
+                    let isSaved = Async.RunSynchronously(fingerTable.[nodeForKey] <? SaveKeys key)
+                    if not isSaved then
+                        keysList.Add(key)
+            | SaveKeys key ->
+                if (key % numNodes) = nodeId then
+                    keysList.Add key
+                    response <! true
             | StabilizeNode ->
                 try
                     let predecessorIdResp = (globalNodesDict.[succesor] <? GetPredecessor)
