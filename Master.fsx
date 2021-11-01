@@ -87,22 +87,27 @@ let RingMaster(mailbox: Actor<_>) =
                 | InitializeRing n ->
                     printfn "Starting execution" 
                     totalNumNodes <- n
+
                 | NotifyMaster nodeId ->
                     if debug then printfn "INFO: Node %i Requested to Join" nodeId
                     localNodeDict.Add(nodeId, true)
+
                 | FindSuccessor nodeId ->
                     let successorId = findSuccessor(nodeId, localNodeDict)
                     if debug then printfn "INFO: Found succesor %i for %i" successorId nodeId
                     response <! successorId
+
                 | GetRingList ->
                     response <! localNodeDict
+
                 | StabilizeRing ->
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
                         worker <! StabilizeNode
-                    let delay = async { do! Async.Sleep(7000) }
+                    let delay = async { do! Async.Sleep(2000) }
                     Async.RunSynchronously(delay)
                     mailbox.Self <! StabilizeRing
+
                 | ConvergeRing ->
                     requestCount <- requestCount + 1
                     if requestCount = numRequestsPerNode then
@@ -110,6 +115,7 @@ let RingMaster(mailbox: Actor<_>) =
                         printfn "Time for convergence: %f ms" stopWatch.Elapsed.TotalMilliseconds
                         printfn "------------- End Transfer -------------"
                         Environment.Exit(0)
+
                 | _ -> ()
         with
             | :? System.IndexOutOfRangeException -> printfn "ERROR: Tried to access outside array!" |> ignore
@@ -134,6 +140,7 @@ let RingWorker (mailbox: Actor<_>) =
         match message with
             | SetNodeId Id ->
                 nodeId <- Id
+
             | JoinRing succesorId ->
                 try 
                     succesor <- succesorId
@@ -141,11 +148,14 @@ let RingWorker (mailbox: Actor<_>) =
                     master <! NotifyMaster nodeId
                 with 
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
+
             | GetPredecessor ->
                 response <! predecessor
+
             | MarkPredecessor predecessorId ->
                 if debug then printfn "INFO: Marking %i as predecessor for %i" predecessorId nodeId
                 predecessor <- predecessorId
+
             | InitializeFingerTable ->
                 if debug then printfn "INFO: Initializing Finger Table for %i" nodeId
                 let response = (master <? GetRingList)
@@ -157,9 +167,10 @@ let RingWorker (mailbox: Actor<_>) =
                     if (nextEntry <= numNodes) then
                         let successorId = findSuccessor(nextEntry, nodeList)
                         fingerTable.Add(successorId, globalNodesDict.[successorId])
-                if not (fingerTable.ContainsKey(0)) && not (nodeId = 0) then 
+                if not (fingerTable.ContainsKey(0)) && nodeId <> 0 then 
                     fingerTable.Add(0, globalNodesDict.[0])
                 if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
+
             | DistributeKeys globalKeysList ->
                 printfn "keys list length %i for node %i" globalKeysList.Length nodeId
                 let mutable newKeyList =  new ResizeArray<_>()
@@ -172,6 +183,7 @@ let RingWorker (mailbox: Actor<_>) =
                 if newKeyList.Count > 0 then
                     globalNodesDict.[succesor] <! DistributeKeys (Seq.toList newKeyList)
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i" nodeId keysList.Count 
+
             | StabilizeNode ->
                 try
                     let predecessorIdResp = (globalNodesDict.[succesor] <? GetPredecessor)
@@ -181,6 +193,7 @@ let RingWorker (mailbox: Actor<_>) =
                 with 
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
                     | :?  System.TimeoutException ->  printfn "ERROR: Unable to StabilizeNode RTO" |> ignore
+
             | _ -> ()
         return! loop()
     }   
@@ -196,14 +209,13 @@ let key = "RingWorker0"
 let worker = spawn system (key) RingWorker
 worker <! SetNodeId 0
 globalNodesDict.Add(0, worker)
-// worker <! JoinRing numNodes
+worker <! JoinRing numNodes
 
 // Create nodes that will become part of ring
-for nodeId in [1..numNodes] do
+for nodeId in [1 .. numNodes] do
     let key: string = "RingWorker" + string(nodeId)
     let worker = spawn system (key) RingWorker
     worker <! SetNodeId nodeId
-    nodeList.Add(nodeId)
     globalNodesDict.Add(nodeId, worker)
 
 // Generating a ring linearly
