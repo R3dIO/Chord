@@ -14,12 +14,12 @@ type NodeMetaInfo = {
 
 type RingMasterMessage = 
     | NotifyMaster of int
-    | InitializeRing of int
     | FindSuccessor of int
     | JoinRing of int * Dictionary<int,IActorRef>
     | StabilizeRing of Dictionary<int,IActorRef>
     | ConvergeRing
     | GetRingList
+
 type RingWorkerMessage =
     | SetNodeId of int
     | InitializeKeys of int
@@ -90,7 +90,6 @@ let fingerTableSize = divideLoop numNodes
 let RingMaster(mailbox: Actor<_>) =
     
     let mutable requestCount = 0
-    let mutable totalNumNodes = 0
     let mutable localNodeList = []
 
     let rec loop()= actor{
@@ -98,10 +97,6 @@ let RingMaster(mailbox: Actor<_>) =
         let response = mailbox.Sender();
         try
             match msg with 
-                | InitializeRing n ->
-                    printfn "Starting execution" 
-                    totalNumNodes <- n
-
                 | JoinRing (nodeId, globalNodeDict) ->
                     let successorId = findSuccessor(nodeId, localNodeList)
                     if debug then printfn "INFO: Found successor %i for %i" successorId nodeId
@@ -227,9 +222,9 @@ let RingWorker (mailbox: Actor<_>) =
 stopWatch.Start()
 let mutable globalNodesDict = new Dictionary<int,IActorRef>()
 let master = spawn system "Master" RingMaster
-master <! InitializeRing numNodes
 
 if debug then printfn "Intializing the ring for %i nodes and Fingertable size %i" numNodes fingerTableSize
+
 // Create nodes that will become part of ring
 for nodeId in [0 .. numNodes] do
     let key: string = "RingWorker" + string(nodeId)
@@ -237,10 +232,8 @@ for nodeId in [0 .. numNodes] do
     worker <! SetNodeId nodeId
     globalNodesDict.Add(nodeId, worker)
 
-master <! JoinRing(0, globalNodesDict) 
-
 // Generating a ring linearly by joining nodes
-for nodeId in [numNodes .. -1 .. 1] do
+for nodeId in [numNodes .. -1 .. 0] do
     master <! JoinRing(nodeId, globalNodesDict)
 
 master <! StabilizeRing globalNodesDict
