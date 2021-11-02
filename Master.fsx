@@ -103,7 +103,6 @@ let RingMaster(mailbox: Actor<_>) =
                     totalNumNodes <- n
 
                 | JoinRing (nodeId, globalNodeDict) ->
-                    if debug then printfn "INFO: Node %i Requested to Join" nodeId
                     let successorId = findSuccessor(nodeId, localNodeList)
                     if debug then printfn "INFO: Found successor %i for %i" successorId nodeId
                     globalNodeDict.[nodeId] <! SetSuccessor (successorId, globalNodeDict.[successorId])
@@ -157,13 +156,14 @@ let RingWorker (mailbox: Actor<_>) =
             | SetNodeId Id ->
                 nodeId <- Id
 
-            | SetSuccessor(successorId, NodeRef) ->
-                try 
-                    successor.NodeId <- successorId
-                    successor.NodeInstance <- NodeRef
-                    successor.NodeInstance <! SetPredecessor (nodeId, mailbox.Self)
-                with 
-                    | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
+            | SetSuccessor(successorId, nodeRef) ->
+                if nodeId <> -1 then
+                    try 
+                        successor.NodeId <- successorId
+                        successor.NodeInstance <- nodeRef
+                        successor.NodeInstance <! SetPredecessor (nodeId, mailbox.Self)
+                    with 
+                        | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
 
             | GetPredecessor requestor ->
                 requestor <! Notify predecessor
@@ -172,6 +172,17 @@ let RingWorker (mailbox: Actor<_>) =
                 if debug then printfn "INFO: Marking %i as predecessor for %i" predecessorId nodeId
                 predecessor.NodeId <- predecessorId
                 predecessor.NodeInstance <- predecessorRef
+            
+            | StabilizeNodeReq ->
+                successor.NodeInstance <? GetPredecessor mailbox.Self
+
+            | Notify nextNodePredecessor  ->
+                if nodeId <> -1 then
+                    if (nextNodePredecessor.NodeId <> -1) && (nextNodePredecessor.NodeId > nodeId) then
+                        if debug then printfn "INFO: Updating successor for %i with %i" nodeId nextNodePredecessor.NodeId
+                        successor.NodeId <- nextNodePredecessor.NodeId
+                        successor.NodeInstance <- nextNodePredecessor.NodeInstance 
+                        successor.NodeInstance <! SetPredecessor (nodeId, mailbox.Self)
 
             | InitializeFingerTable (master, globalNodeDict) ->
                 if debug then printfn "INFO: Initializing Finger Table for %i" nodeId
@@ -189,32 +200,23 @@ let RingWorker (mailbox: Actor<_>) =
                 if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
 
             | DistributeKeys globalKeysList ->
-                printfn "keys list length %i for node %i" globalKeysList.Length nodeId
-                let mutable newKeyList =  new ResizeArray<_>()
+                if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Count globalKeysList.Length 
+ 
+                let mutable newKeyList =  []
                 for key in globalKeysList do
                     if (key % numNodes) <= nodeId then
                         keysList.Add(key)
                     else    
-                        newKeyList.Add(key)
-                printfn "keys list length after processsing %i for node %i" newKeyList.Count successor.NodeId
-                if newKeyList.Count > 0 then
-                    successor.NodeInstance <! DistributeKeys (Seq.toList newKeyList)
-                if debug then printfn "INFO: Distributing keys at node %i and current key count %i" nodeId keysList.Count 
+                        newKeyList <- newKeyList @ [key]
 
-            | StabilizeNodeReq ->
-                successor.NodeInstance <? GetPredecessor mailbox.Self
-
-            | Notify nextNodePredecessor  ->      
-                if (nextNodePredecessor.NodeId <> -1) && (nextNodePredecessor.NodeId > nodeId) then
-                    if debug then printfn "INFO: Updating successor for %i with %i" nodeId nextNodePredecessor.NodeId
-                    successor.NodeId <- nextNodePredecessor.NodeId
-                    successor.NodeInstance <- nextNodePredecessor.NodeInstance 
-                    successor.NodeInstance <! SetPredecessor (nodeId, mailbox.Self)
+                if newKeyList.Length > 0 then
+                    successor.NodeInstance <! DistributeKeys newKeyList
 
             | PrintRing ->
                 // if (successor <> 0) then
                     printf "%i --->>> " nodeId
                     successor.NodeInstance <! PrintRing
+
             | _ -> ()
         return! loop()
     }   
@@ -235,8 +237,6 @@ for nodeId in [0 .. numNodes] do
     worker <! SetNodeId nodeId
     globalNodesDict.Add(nodeId, worker)
 
-let initWorker = globalNodesDict.[0]
-initWorker <! SetNodeId 0
 master <! JoinRing(0, globalNodesDict) 
 
 // Generating a ring linearly by joining nodes
@@ -247,6 +247,8 @@ master <! StabilizeRing globalNodesDict
 
 for KeyValue(key, worker) in globalNodesDict do
     worker <! InitializeFingerTable (master, globalNodesDict)
+
+System.Threading.Thread.Sleep(500)
 
 let keysList = [0 .. numNodes * numRequestsPerNode]
 globalNodesDict.[0] <! DistributeKeys keysList
