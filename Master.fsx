@@ -59,6 +59,10 @@ let findSuccessor (nodeId:int, nodeList:Dictionary<int,_>) =
                 flag <- false
     successor 
 
+let findSuccessorInList (nodeId:int, nodeList:list<bool>) =
+    let successor = nodeList |> List.indexed |> List.find ( fun(index, value) -> index > nodeId && value ) 
+    fst(successor) 
+
 let RandomJoin(maxNodes:int, master:IActorRef) = 
     // Select a random node and join it to ring
     for x in [1..maxNodes] do
@@ -227,11 +231,11 @@ for node in [numNodes .. -1 .. 1] do
 
 master <! StabilizeRing
 
-// for KeyValue(key, worker) in globalNodesDict do
-//     worker <! InitializeFingerTable
+for KeyValue(key, worker) in globalNodesDict do
+    worker <! InitializeFingerTable
 
-// let keysList = [0 .. numNodes * numRequestsPerNode]
-// globalNodesDict.[0] <! DistributeKeys keysList
+let keysList = [0 .. numNodes * numRequestsPerNode]
+globalNodesDict.[0] <! DistributeKeys keysList
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
