@@ -50,14 +50,14 @@ let rec divideLoop nodeSize =
 
 let findSuccessor (nodeId:int, nodeList:Dictionary<int,_>) =
     let mutable flag = true
-    let mutable succesor = 0
+    let mutable successor = 0
     if nodeId < numNodes then
         for id in nodeId .. numNodes do 
             if nodeList.ContainsKey id && flag then
                 // if debug then printfn "found id %i" id
-                succesor <- id
+                successor <- id
                 flag <- false
-    succesor 
+    successor 
 
 let RandomJoin(maxNodes:int, master:IActorRef) = 
     // Select a random node and join it to ring
@@ -95,7 +95,7 @@ let RingMaster(mailbox: Actor<_>) =
 
                 | FindSuccessor nodeId ->
                     let successorId = findSuccessor(nodeId, localNodeDict)
-                    if debug then printfn "INFO: Found succesor %i for %i" successorId nodeId
+                    if debug then printfn "INFO: Found successor %i for %i" successorId nodeId
                     response <! successorId
 
                 | GetRingList ->
@@ -130,7 +130,7 @@ let master = spawn system "Master" RingMaster
 //-------------------------------------- Worker Actor --------------------------------------//
 let RingWorker (mailbox: Actor<_>) =
     let mutable nodeId = -1;
-    let mutable succesor = -1;
+    let mutable successor = -1;
     let mutable predecessor = -1;
     let mutable keysList = new ResizeArray<_>()
     let mutable fingerTable = new Dictionary<int,IActorRef>()
@@ -142,11 +142,11 @@ let RingWorker (mailbox: Actor<_>) =
             | SetNodeId Id ->
                 nodeId <- Id
 
-            | JoinRing succesorId ->
+            | JoinRing successorId ->
                 try 
-                    succesor <- succesorId
+                    successor <- successorId
                     master <! NotifyMaster nodeId
-                    globalNodesDict.[succesorId] <! MarkPredecessor nodeId
+                    globalNodesDict.[successorId] <! MarkPredecessor nodeId
                 with 
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
 
@@ -181,19 +181,19 @@ let RingWorker (mailbox: Actor<_>) =
                         keysList.Add(key)
                     else    
                         newKeyList.Add(key)
-                printfn "keys list length after processsing %i for node %i" newKeyList.Count succesor
+                printfn "keys list length after processsing %i for node %i" newKeyList.Count successor
                 if newKeyList.Count > 0 then
-                    globalNodesDict.[succesor] <! DistributeKeys (Seq.toList newKeyList)
+                    globalNodesDict.[successor] <! DistributeKeys (Seq.toList newKeyList)
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i" nodeId keysList.Count 
 
             | StabilizeNodeReq ->
-                globalNodesDict.[succesor] <? GetPredecessor mailbox.Self
+                globalNodesDict.[successor] <? GetPredecessor mailbox.Self
                 
             | Notify nextNodePredecessor ->      
                 if (nextNodePredecessor <> -1) && (nextNodePredecessor > nodeId) then
-                    if debug then printfn "INFO: Updating succesor for %i with %i" nodeId nextNodePredecessor
-                    succesor <- nextNodePredecessor
-                    globalNodesDict.[succesor] <! MarkPredecessor nodeId
+                    if debug then printfn "INFO: Updating successor for %i with %i" nodeId nextNodePredecessor
+                    successor <- nextNodePredecessor
+                    globalNodesDict.[successor] <! MarkPredecessor nodeId
 
             | _ -> ()
         return! loop()
