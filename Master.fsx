@@ -11,20 +11,22 @@ type RingMasterMessage =
     | NotifyMaster of int
     | InitializeRing of int
     | FindSuccessor of int
+    | JoinRing of int * IActorRef
     | StabilizeRing
     | ConvergeRing
     | GetRingList
 
 type RingWorkerMessage =
-    | JoinRing of int
     | SetNodeId of int
     | InitializeKeys of int
-    | MarkPredecessor of int
-    | InitializeFingerTable
+    | SetSuccessor of int
+    | SetPredecessor of int
+    | InitializeFingerTable of IActorRef
     | StabilizeNodeReq
     | GetPredecessor of IActorRef
     | Notify of int
     | DistributeKeys of list<int>
+    | PrintRing
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequestsPerNode = fsi.CommandLineArgs.[2] |> int
@@ -48,20 +50,25 @@ let rec divideLoop nodeSize =
         count <- count + 1
     count    
 
-let findSuccessor (nodeId:int, nodeList:Dictionary<int,_>) =
+let findSuccessorDict (nodeId:int, nodeList:Dictionary<int,_>) =
     let mutable flag = true
     let mutable successor = 0
     if nodeId < numNodes then
-        for id in nodeId .. numNodes do 
+        for id in (nodeId + 1) .. numNodes do 
             if nodeList.ContainsKey id && flag then
                 // if debug then printfn "found id %i" id
                 successor <- id
                 flag <- false
     successor 
 
-let findSuccessorInList (nodeId:int, nodeList:list<bool>) =
-    let successor = nodeList |> List.indexed |> List.find ( fun(index, value) -> index > nodeId && value ) 
-    fst(successor) 
+let findSuccessor (nodeId:int, nodeList:list<int>) =
+    // let successor = nodeList |> List.indexed |> List.find ( fun(index, value) -> index > nodeId && value ) 
+    // fst(successor) 
+    try
+        let successor = nodeList |> List.sort |> List.find ( fun(elem) -> elem > nodeId )
+        successor
+    with 
+        | :?  System.Collections.Generic.KeyNotFoundException -> 0
 
 let RandomJoin(maxNodes:int, master:IActorRef) = 
     // Select a random node and join it to ring
@@ -82,7 +89,7 @@ let RingMaster(mailbox: Actor<_>) =
     
     let mutable requestCount = 0
     let mutable totalNumNodes = 0
-    let mutable localNodeDict = new Dictionary<int,bool>()
+    let mutable localNodeDict = []
 
     let rec loop()= actor{
         let! msg = mailbox.Receive();
@@ -93,14 +100,12 @@ let RingMaster(mailbox: Actor<_>) =
                     printfn "Starting execution" 
                     totalNumNodes <- n
 
-                | NotifyMaster nodeId ->
+                | JoinRing (nodeId, nodeRef) ->
                     if debug then printfn "INFO: Node %i Requested to Join" nodeId
-                    localNodeDict.Add(nodeId, true)
-
-                | FindSuccessor nodeId ->
                     let successorId = findSuccessor(nodeId, localNodeDict)
                     if debug then printfn "INFO: Found successor %i for %i" successorId nodeId
-                    response <! successorId
+                    nodeRef <! SetSuccessor successorId
+                    localNodeDict <- localNodeDict @ [nodeId]
 
                 | GetRingList ->
                     response <! localNodeDict
@@ -109,7 +114,7 @@ let RingMaster(mailbox: Actor<_>) =
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
                         worker <! StabilizeNodeReq
-                    let delay = async { do! Async.Sleep(2000) }
+                    let delay = async { do! Async.Sleep(5000) }
                     Async.RunSynchronously(delay)
                     mailbox.Self <! StabilizeRing
 
@@ -128,7 +133,6 @@ let RingMaster(mailbox: Actor<_>) =
     }            
     loop()
 
-let master = spawn system "Master" RingMaster
 //-------------------------------------- Master Actor --------------------------------------//
 
 //-------------------------------------- Worker Actor --------------------------------------//
@@ -146,25 +150,24 @@ let RingWorker (mailbox: Actor<_>) =
             | SetNodeId Id ->
                 nodeId <- Id
 
-            | JoinRing successorId ->
+            | SetSuccessor successorId ->
                 try 
                     successor <- successorId
-                    master <! NotifyMaster nodeId
-                    globalNodesDict.[successorId] <! MarkPredecessor nodeId
+                    globalNodesDict.[successorId] <! SetPredecessor nodeId
                 with 
                     | :?  System.Collections.Generic.KeyNotFoundException ->  printfn "ERROR: Key doesn't exist" |> ignore
 
             | GetPredecessor requestor ->
                 requestor <! Notify predecessor
 
-            | MarkPredecessor predecessorId ->
+            | SetPredecessor predecessorId ->
                 if debug then printfn "INFO: Marking %i as predecessor for %i" predecessorId nodeId
                 predecessor <- predecessorId
 
-            | InitializeFingerTable ->
+            | InitializeFingerTable master ->
                 if debug then printfn "INFO: Initializing Finger Table for %i" nodeId
                 let response = (master <? GetRingList)
-                let nodeList:Dictionary<int, bool> = Async.RunSynchronously response
+                let nodeList = Async.RunSynchronously response
                 
                 for exponent in [0..fingerTableSize] do
                     let mutable nextEntry = nodeId + (pown 2 exponent) - 1
@@ -197,8 +200,12 @@ let RingWorker (mailbox: Actor<_>) =
                 if (nextNodePredecessor <> -1) && (nextNodePredecessor > nodeId) then
                     if debug then printfn "INFO: Updating successor for %i with %i" nodeId nextNodePredecessor
                     successor <- nextNodePredecessor
-                    globalNodesDict.[successor] <! MarkPredecessor nodeId
+                    globalNodesDict.[successor] <! SetPredecessor nodeId
 
+            | PrintRing ->
+                // if (successor <> 0) then
+                    printf "%i --->>> " nodeId
+                    globalNodesDict.[successor] <! PrintRing
             | _ -> ()
         return! loop()
     }   
@@ -207,35 +214,34 @@ let RingWorker (mailbox: Actor<_>) =
 
 //-------------------------------------- Main Program --------------------------------------//
 stopWatch.Start()
+let master = spawn system "Master" RingMaster
 master <! InitializeRing numNodes
 
 if debug then printfn "Intializing the ring for %i nodes and Fingertable size %i" numNodes fingerTableSize
-let key = "RingWorker0" 
-let worker = spawn system (key) RingWorker
-worker <! SetNodeId 0
-globalNodesDict.Add(0, worker)
-worker <! JoinRing numNodes
-
 // Create nodes that will become part of ring
-for nodeId in [1 .. numNodes] do
+for nodeId in [0 .. numNodes] do
     let key: string = "RingWorker" + string(nodeId)
     let worker = spawn system (key) RingWorker
     worker <! SetNodeId nodeId
     globalNodesDict.Add(nodeId, worker)
 
-// Generating a ring linearly
-for node in [numNodes .. -1 .. 1] do
-    let worker = globalNodesDict.[node] 
-    let successorId = Async.RunSynchronously (master <? FindSuccessor node)
-    worker <! JoinRing successorId
+let initWorker = globalNodesDict.[0]
+initWorker <! SetNodeId 0
+master <! JoinRing(0,initWorker) 
+
+// Generating a ring linearly by joining nodes
+for nodeId in [numNodes .. -1 .. 1] do
+    master <! JoinRing(nodeId, globalNodesDict.[nodeId])
 
 master <! StabilizeRing
 
-for KeyValue(key, worker) in globalNodesDict do
-    worker <! InitializeFingerTable
+globalNodesDict.[0] <! PrintRing 
 
-let keysList = [0 .. numNodes * numRequestsPerNode]
-globalNodesDict.[0] <! DistributeKeys keysList
+for KeyValue(key, worker) in globalNodesDict do
+    worker <! InitializeFingerTable master
+
+// let keysList = [0 .. numNodes * numRequestsPerNode]
+// globalNodesDict.[0] <! DistributeKeys keysList
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
