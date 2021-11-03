@@ -40,7 +40,7 @@ let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequestsPerNode = fsi.CommandLineArgs.[2] |> int
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
-let debug = true
+let debug = false
 let rand = Random()
 
 if numNodes <= 0 || numRequestsPerNode <= 0 then
@@ -109,6 +109,7 @@ let RingMaster(mailbox: Actor<_>) =
         try
             match msg with 
                 | InitializeRing nodeDict ->
+                    printfn "Intializing the ring for %i nodes and Fingertable size %i" numNodes fingerTableSize
                     globalNodesDict <- nodeDict
  
                 | JoinRing (nodeId) ->
@@ -125,7 +126,7 @@ let RingMaster(mailbox: Actor<_>) =
                     if searchCount = (numNodes * numRequestsPerNode) then
                         stopWatch.Stop()
                         printfn "Time for convergence: %f ms" stopWatch.Elapsed.TotalMilliseconds
-                        printfn "Search complete with %i hops" hopCount
+                        printfn "Search complete with Total %i hops and Average %i" hopCount (hopCount/(numNodes*numRequestsPerNode))
                         Environment.Exit(0)
 
                 | CountHops ->
@@ -148,6 +149,7 @@ let RingMaster(mailbox: Actor<_>) =
                     nodeSaturationCount <- nodeSaturationCount + 1
                     localNodeList <- List.sort localNodeList
                     if nodeSaturationCount = numNodes then
+                        printfn "Distributed all keys searching"
                         for KeyValue(key, worker) in globalNodesDict do
                             for numKeys in [1 .. numRequestsPerNode] do
                                 let randomKey = rand.Next(1, (numNodes * numRequestsPerNode))
@@ -235,7 +237,7 @@ let RingWorker (mailbox: Actor<_>) =
                     if predecessor.NodeId <> -1 then
                         predecessor.NodeInstance <! DistributeKeys (newKeyList, master)
                     else 
-                        if debug then printfn "INFO: Ring is disconnected at %i stabilising" nodeId
+                        printfn "INFO: Ring is disconnected at %i stabilising" nodeId
                         mailbox.Self <! StabilizeNodeReq
                         mailbox.Self <! DistributeKeys (newKeyList, master)
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Length globalKeysList.Length 
@@ -277,8 +279,6 @@ stopWatch.Start()
 let mutable globalNodesDict = new Dictionary<int,IActorRef>()
 let master = spawn system "Master" RingMaster
 
-if debug then printfn "Intializing the ring for %i nodes and Fingertable size %i" numNodes fingerTableSize
-
 // Create nodes that will become part of ring
 for nodeId in [0 .. numNodes] do
     let key: string = "RingWorker" + string(nodeId)
@@ -293,6 +293,7 @@ master <! JoinRing 0
 for nodeId in [numNodes .. -1 .. 1] do
     master <! JoinRing nodeId
 
+printfn "Joined all nodes"
 master <! StabilizeRing
 
 for KeyValue(key, worker) in globalNodesDict do
