@@ -40,7 +40,7 @@ let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequestsPerNode = fsi.CommandLineArgs.[2] |> int
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
-let debug = false
+let debug = true
 let rand = Random()
 
 if numNodes <= 0 || numRequestsPerNode <= 0 then
@@ -78,11 +78,9 @@ let findSuccessor (nodeId:int, nodeList:list<int>) =
         | :?  System.Collections.Generic.KeyNotFoundException -> 0
 
 let searchFingertable (keyToFind:int, fingerTable:list<int>) =
-    try
-        let keyNode = fingerTable |> List.sort |> List.find ( fun(nodeId) -> nodeId >= keyToFind )
-        keyNode
-    with 
-        | :?  System.Collections.Generic.KeyNotFoundException -> 0
+    let mutable successor = 0
+    for nodeId in  fingerTable do if  keyToFind >= nodeId then successor <- nodeId
+    successor
 
 let RandomJoin(maxNodes:int, globalNodesDict: Dictionary<int, IActorRef>, nodeList:ResizeArray<int>, master:IActorRef) = 
     // Select a random node and join it to ring
@@ -155,6 +153,7 @@ let RingMaster(mailbox: Actor<_>) =
                         for KeyValue(key, worker) in globalNodesDict do
                             for numKeys in [1 .. numRequestsPerNode] do
                                 let randomKey = rand.Next(1, (numNodes * numRequestsPerNode))
+                                // System.Threading.Thread.Sleep(5000)
                                 worker <! FindKey(randomKey, worker, mailbox.Self) 
 
                 | _ -> ()
@@ -254,14 +253,14 @@ let RingWorker (mailbox: Actor<_>) =
                     
                     if not keyFound then 
                         let ftKeyList = [ for KeyValue(key, value) in fingerTable do yield key ]
-                        let nextNode =  searchFingertable(keyToFind, ftKeyList)
-                        if (nodeId <> 0) && (nextNode = 0) then
-                            fingerTable.[nextNode] <! FindKey (keyToFind, requestorRef, master)
+                        let nextNode =  searchFingertable(keyToFind % numNodes, ftKeyList)
+                        if (nodeId = 0) && (nextNode = 0) then
+                            if debug then printfn "INFO: key %i not found at %i and table is %A" keyToFind  nodeId keysList  
                         else
-                            if debug then printfn "INFO: key %i not found at last node" keyToFind    
+                            fingerTable.[nextNode] <! FindKey (keyToFind, requestorRef, master)
 
             | FoundKey (keyToFind, founderId, master) ->
-                printfn "Found key %i at node %i" keyToFind founderId
+                if debug then printfn "Found key %i at node %i" keyToFind founderId
                 master <! CountSearches
 
             | PrintRing ->
@@ -300,8 +299,6 @@ master <! StabilizeRing
 
 for KeyValue(key, worker) in globalNodesDict do
     worker <! InitializeFingerTable (master, globalNodesDict)
-
-System.Threading.Thread.Sleep(500)
 
 let keysList = [0 .. (numNodes * numRequestsPerNode)]
 let lastNode = ([ for KeyValue(key, value) in globalNodesDict do yield key ] |> List.max)
