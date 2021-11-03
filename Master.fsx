@@ -232,8 +232,10 @@ for nodeId in [0 .. numNodes] do
     worker <! SetNodeId nodeId
     globalNodesDict.Add(nodeId, worker)
 
+master <! JoinRing(0, globalNodesDict)
+
 // Generating a ring linearly by joining nodes
-for nodeId in [numNodes .. -1 .. 0] do
+for nodeId in [numNodes .. -1 .. 1] do
     master <! JoinRing(nodeId, globalNodesDict)
 
 master <! StabilizeRing globalNodesDict
