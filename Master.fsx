@@ -79,7 +79,7 @@ let findSuccessor (nodeId:int, nodeList:list<int>) =
 
 let searchFingertable (keyToFind:int, fingerTable:list<int>) =
     let mutable successor = 0
-    for nodeId in  fingerTable do if  keyToFind >= nodeId then successor <- nodeId
+    for nodeId in  fingerTable do if  keyToFind >= nodeId && nodeId >= successor then successor <- nodeId
     successor
 
 let RandomJoin(maxNodes:int, globalNodesDict: Dictionary<int, IActorRef>, nodeList:ResizeArray<int>, master:IActorRef) = 
@@ -194,6 +194,7 @@ let RingWorker (mailbox: Actor<_>) =
 
             | SetPredecessor (predecessorId, predecessorRef) ->
                 if debug then printfn "INFO: Marking %i as predecessor for %i" predecessorId nodeId
+                // if predecessor.NodeId <> -1 then predecessor.NodeInstance <! SetSuccessor(predecessorId, predecessorRef)
                 predecessor.NodeId <- predecessorId
                 predecessor.NodeInstance <- predecessorRef
             
