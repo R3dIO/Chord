@@ -19,6 +19,7 @@ type RingMasterMessage =
     | StartSearch
     | InitializeFingerTable
     | InitializeRing of Dictionary<int,IActorRef>
+    | DistributeKeys of list<int>
     | CountSearches
     | CountHops
     | GetRingList
@@ -28,11 +29,12 @@ type RingWorkerMessage =
     | InitializeKeys of int
     | SetSuccessor of int * IActorRef
     | SetPredecessor of int * IActorRef
-    | CreateFingerTable of list<int> * Dictionary<int,IActorRef>
+    | CreateFingerTable of list<int> * Dictionary<int,IActorRef> * IActorRef
     | StabilizeNodeReq
     | GetPredecessor of IActorRef
     | Notify of NodeMetaInfo
-    | DistributeKeys of list<int> * IActorRef
+    | ShareKeys of list<int> * IActorRef
+    | SetKeys of list<int>
     | FindKey of int * IActorRef * IActorRef
     | FoundKey of int * int * IActorRef
     | PrintRing
@@ -41,7 +43,7 @@ let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequestsPerNode = fsi.CommandLineArgs.[2] |> int
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
-let debug = true
+let debug = false
 let rand = Random()
 
 if numNodes <= 0 || numRequestsPerNode <= 0 then
@@ -151,12 +153,22 @@ let RingMaster(mailbox: Actor<_>) =
 
                 | InitializeFingerTable ->
                     for KeyValue(key, worker) in globalNodesDict do
-                        worker <! CreateFingerTable (localNodeList, globalNodesDict)
+                        worker <! CreateFingerTable (localNodeList, globalNodesDict, mailbox.Self)
+
+                | DistributeKeys keyslist ->
+                    let avgKeys = keyslist.Length / localNodeList.Length
+                    let mutable updatedKeyList = ( keyslist |> List.sort)
+                    let reverseNodeList = ( localNodeList |> List.sortDescending ) 
+                    for nodeId in reverseNodeList do
+                        mailbox.Self <! StartSearch 
+                        let nodeKeyList = ( updatedKeyList |> List.filter ( fun(key) -> (key % numNodes) = nodeId )  )
+                        updatedKeyList <- ( updatedKeyList |> List.except nodeKeyList)
+                        globalNodesDict.[nodeId] <! SetKeys nodeKeyList
 
                 | StartSearch -> 
                     nodeSaturationCount <- nodeSaturationCount + 1
                     localNodeList <- List.sort localNodeList
-                    if nodeSaturationCount = numNodes then
+                    if nodeSaturationCount = 2 * numNodes then
                         printfn "Distributed all keys searching"
                         for KeyValue(key, worker) in globalNodesDict do
                             for numKeys in [1 .. numRequestsPerNode] do
@@ -217,7 +229,7 @@ let RingWorker (mailbox: Actor<_>) =
                         successor.NodeInstance <- nextNodePredecessor.NodeInstance 
                         successor.NodeInstance <! SetPredecessor (nodeId, mailbox.Self)
 
-            | CreateFingerTable (nodeList, globalNodeDict) ->
+            | CreateFingerTable (nodeList, globalNodeDict, master) ->
                 if debug then printfn "INFO: Initializing Finger Table for %i" nodeId
                 
                 for exponent in [0..fingerTableSize] do
@@ -229,9 +241,14 @@ let RingWorker (mailbox: Actor<_>) =
 
                 if not (fingerTable.ContainsKey(0)) && nodeId <> 0 then 
                     fingerTable.Add(0, globalNodeDict.[0])
+                
+                master <! StartSearch
                 // if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
 
-            | DistributeKeys (globalKeysList, master) ->
+            | SetKeys newKeyList ->
+                keysList <- keysList @ newKeyList
+
+            | ShareKeys (globalKeysList, master) ->
                 master <! StartSearch
                 let mutable newKeyList =  []
                 for key in globalKeysList do
@@ -242,11 +259,11 @@ let RingWorker (mailbox: Actor<_>) =
 
                 if newKeyList.Length > 0 then
                     if predecessor.NodeId <> -1 then
-                        predecessor.NodeInstance <! DistributeKeys (newKeyList, master)
+                        predecessor.NodeInstance <! ShareKeys (newKeyList, master)
                     else 
                         printfn "INFO: Ring is disconnected at %i stabilising" nodeId
                         mailbox.Self <! StabilizeNodeReq
-                        mailbox.Self <! DistributeKeys (newKeyList, master)
+                        mailbox.Self <! ShareKeys (newKeyList, master)
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Length globalKeysList.Length 
             
             | FindKey (keyToFind, requestorRef, master) ->
@@ -259,12 +276,15 @@ let RingWorker (mailbox: Actor<_>) =
                             requestorRef <! FoundKey (keyToFind, nodeId, master)
                     
                     if not keyFound then 
-                        let ftKeyList = [ for KeyValue(key, value) in fingerTable do yield key ]
-                        let nextNode =  searchFingertable(keyToFind % numNodes, ftKeyList)
-                        if (nodeId = 0) && (nextNode = 0) then
-                            if debug then printfn "INFO: key %i not found at %i and table is %A" keyToFind  nodeId keysList  
-                        else
-                            fingerTable.[nextNode] <! FindKey (keyToFind, requestorRef, master)
+                        if fingerTable.Count < 1 then successor.NodeInstance <! FindKey (keyToFind, requestorRef, master)
+                        else 
+                            let ftKeyList = [ for KeyValue(key, value) in fingerTable do yield key ]
+                            let nextNode =  searchFingertable(keyToFind % numNodes, ftKeyList)
+                            if (nodeId = 0) && (nextNode = 0) then
+                                if debug then printfn "INFO: key %i not found at %i and table is %A" keyToFind  nodeId keysList  
+                                // master <! CountSearches
+                            else
+                                fingerTable.[nextNode] <! FindKey (keyToFind, requestorRef, master)
 
             | FoundKey (keyToFind, founderId, master) ->
                 if debug then printfn "Found key %i at node %i" keyToFind founderId
@@ -310,11 +330,10 @@ for nodeId in [numNodes .. -1 .. 1] do
 printfn "Joined all nodes"
 master <! StabilizeRing
 
-master <! InitializeFingerTable
-
 let keysList = [0 .. (numNodes * numRequestsPerNode)]
-let lastNode = ([ for KeyValue(key, value) in globalNodesDict do yield key ] |> List.max)
-globalNodesDict.[lastNode] <! DistributeKeys (keysList,master)
+master <! DistributeKeys keysList
+
+master <! InitializeFingerTable
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
