@@ -38,7 +38,7 @@ let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequestsPerNode = fsi.CommandLineArgs.[2] |> int
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
-let debug = true
+let debug = false
 let rand = Random()
 
 if numNodes <= 0 || numRequestsPerNode <= 0 then
@@ -117,6 +117,17 @@ let RingMaster(mailbox: Actor<_>) =
                 | GetRingList ->
                     response <! localNodeList
 
+                | CountSearches ->
+                    searchCount <- searchCount + 1
+                    if searchCount = (numNodes * numRequestsPerNode) then
+                        stopWatch.Stop()
+                        printfn "Time for convergence: %f ms" stopWatch.Elapsed.TotalMilliseconds
+                        printfn "Search complete with %i hops" hopCount
+                        Environment.Exit(0)
+
+                | CountHops ->
+                    hopCount <- hopCount + 1
+
                 | StabilizeRing globalNodesDict ->
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
@@ -129,17 +140,6 @@ let RingMaster(mailbox: Actor<_>) =
                     let delay = async { do! Async.Sleep(5000) }
                     Async.RunSynchronously(delay)
                     mailbox.Self <! StabilizeRing
-
-                | CountSearches ->
-                    searchCount <- searchCount + 1
-                    if searchCount = (numNodes * numRequestsPerNode) then
-                        stopWatch.Stop()
-                        printfn "Time for convergence: %f ms" stopWatch.Elapsed.TotalMilliseconds
-                        printfn "Search complete with %i hops" hopCount
-                        Environment.Exit(0)
-
-                | CountHops ->
-                    hopCount <- hopCount + 1
 
                 | _ -> ()
         with
@@ -155,7 +155,7 @@ let RingWorker (mailbox: Actor<_>) =
     let mutable nodeId = -1;
     let mutable successor = {NodeId = -1; NodeInstance = null};
     let mutable predecessor = {NodeId = -1; NodeInstance = null};
-    let mutable keysList = new ResizeArray<_>()
+    let mutable keysList = []
     let mutable fingerTable = new Dictionary<int,IActorRef>()
 
     let rec loop()= actor{
@@ -213,10 +213,11 @@ let RingWorker (mailbox: Actor<_>) =
                 let mutable newKeyList =  []
                 for key in globalKeysList do
                     if (key % numNodes) >= nodeId then
-                        keysList.Add(key)
+                        keysList <- keysList @ [key]
                     else    
                         newKeyList <- newKeyList @ [key]
 
+                // printfn "kl for node %i is %A" nodeId keysList
                 if newKeyList.Length > 0 then
                     if predecessor.NodeId <> -1 then
                         predecessor.NodeInstance <! DistributeKeys newKeyList
@@ -224,13 +225,14 @@ let RingWorker (mailbox: Actor<_>) =
                         if debug then printfn "INFO: Ring is disconnected at %i stabilising" nodeId
                         mailbox.Self <! StabilizeNodeReq
                         mailbox.Self <! DistributeKeys newKeyList
-
-                if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Count globalKeysList.Length 
+                if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Length globalKeysList.Length 
             
             | FindKey (keyToFind, requestorRef, master) ->
+                    // printfn "Request to find key %i at node %i with key count %i" keyToFind nodeId keysList.Length
                     master <! CountHops 
                     let mutable keyFound = false
                     for keys in keysList do
+                        printfn "search key is %i and local key is %i" keyToFind keys
                         if keyToFind = keys then
                             keyFound <- true
                             requestorRef <! FoundKey (keyToFind, nodeId, master)
@@ -241,7 +243,7 @@ let RingWorker (mailbox: Actor<_>) =
                         if (nodeId <> 0) && (nextNode = 0) then
                             fingerTable.[nextNode] <! FindKey (keyToFind, requestorRef, master)
                         else
-                            if debug then printfn "INFO: key not found at last node"    
+                            if debug then printfn "INFO: key %i not found at last node" keyToFind    
 
             | FoundKey (keyToFind, founderId, master) ->
                 if debug then printfn "Found key %i at node %i" keyToFind founderId
@@ -288,6 +290,8 @@ System.Threading.Thread.Sleep(500)
 let keysList = [0 .. (numNodes * numRequestsPerNode)]
 let lastNode = ([ for KeyValue(key, value) in globalNodesDict do yield key ] |> List.max)
 globalNodesDict.[lastNode] <! DistributeKeys keysList
+
+System.Threading.Thread.Sleep(5000)
 
 for KeyValue(key, worker) in globalNodesDict do
     for numKeys in [1 .. numRequestsPerNode] do
