@@ -176,7 +176,7 @@ let RingWorker (mailbox: Actor<_>) =
                 predecessor.NodeInstance <- predecessorRef
             
             | StabilizeNodeReq ->
-                successor.NodeInstance <? GetPredecessor mailbox.Self
+                successor.NodeInstance <! GetPredecessor mailbox.Self
 
             | Notify nextNodePredecessor  ->
                 if nodeId <> -1 then
@@ -199,20 +199,25 @@ let RingWorker (mailbox: Actor<_>) =
 
                 if not (fingerTable.ContainsKey(0)) && nodeId <> 0 then 
                     fingerTable.Add(0, globalNodeDict.[0])
-                if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
+                // if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
 
             | DistributeKeys globalKeysList ->
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Count globalKeysList.Length 
  
                 let mutable newKeyList =  []
                 for key in globalKeysList do
-                    if (key % numNodes) <= nodeId then
+                    if (key % numNodes) >= nodeId then
                         keysList.Add(key)
                     else    
                         newKeyList <- newKeyList @ [key]
 
                 if newKeyList.Length > 0 then
-                    successor.NodeInstance <! DistributeKeys newKeyList
+                    if predecessor.NodeId <> -1 then
+                        predecessor.NodeInstance <! DistributeKeys newKeyList
+                    else 
+                        if debug then printfn "INFO: Ring is disconnected at %i stabilising" nodeId
+                        mailbox.Self <! StabilizeNodeReq
+                        mailbox.Self <! DistributeKeys newKeyList
 
             | PrintRing ->
                 // if (successor <> 0) then
@@ -252,7 +257,7 @@ for KeyValue(key, worker) in globalNodesDict do
 
 System.Threading.Thread.Sleep(500)
 
-let keysList = [0 .. numNodes * numRequestsPerNode]
+let keysList = [0 .. (numNodes * numRequestsPerNode)]
 let lastNode = ([ for KeyValue(key, value) in globalNodesDict do yield key ] |> List.max)
 globalNodesDict.[lastNode] <! DistributeKeys keysList
 
