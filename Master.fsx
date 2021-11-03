@@ -50,12 +50,12 @@ if numNodes <= 0 || numRequestsPerNode <= 0 then
 
 //-------------------------------------- Utils --------------------------------------//
 let rec divideLoop nodeSize =
-    let mutable tableSize = nodeSize
-    let mutable count = 0
-    while (tableSize > 0) do
-        tableSize <- tableSize/2
-        count <- count + 1
-    count    
+    let mutable tableSize = 0
+    let mutable maxNodes = nodeSize
+    while maxNodes > 0 do
+        tableSize <- tableSize + 1
+        maxNodes <- (maxNodes >>> 1)
+    tableSize        
 
 let findSuccessorDict (nodeId:int, nodeList:Dictionary<int,_>) =
     let mutable flag = true
