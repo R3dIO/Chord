@@ -14,8 +14,10 @@ type NodeMetaInfo = {
 
 type RingMasterMessage = 
     | FindSuccessor of int
-    | JoinRing of int * Dictionary<int,IActorRef>
-    | StabilizeRing of Dictionary<int,IActorRef>
+    | JoinRing of int
+    | StabilizeRing
+    | StartSearch
+    | InitializeRing of Dictionary<int,IActorRef>
     | CountSearches
     | CountHops
     | GetRingList
@@ -29,7 +31,7 @@ type RingWorkerMessage =
     | StabilizeNodeReq
     | GetPredecessor of IActorRef
     | Notify of NodeMetaInfo
-    | DistributeKeys of list<int>
+    | DistributeKeys of list<int> * IActorRef
     | FindKey of int * IActorRef * IActorRef
     | FoundKey of int * int * IActorRef
     | PrintRing
@@ -102,16 +104,21 @@ let RingMaster(mailbox: Actor<_>) =
     let mutable searchCount = 0
     let mutable hopCount = 0
     let mutable localNodeList = []
+    let mutable nodeSaturationCount = 0
+    let mutable globalNodesDict = new Dictionary<int,IActorRef>()
 
     let rec loop()= actor{
         let! msg = mailbox.Receive();
         let response = mailbox.Sender();
         try
             match msg with 
-                | JoinRing (nodeId, globalNodeDict) ->
+                | InitializeRing nodeDict ->
+                    globalNodesDict <- nodeDict
+ 
+                | JoinRing (nodeId) ->
                     let successorId = findSuccessor(nodeId, localNodeList)
                     if debug then printfn "INFO: Found successor %i for %i" successorId nodeId
-                    globalNodeDict.[nodeId] <! SetSuccessor (successorId, globalNodeDict.[successorId])
+                    globalNodesDict.[nodeId] <! SetSuccessor (successorId, globalNodesDict.[successorId])
                     localNodeList <- localNodeList @ [nodeId]
 
                 | GetRingList ->
@@ -128,7 +135,7 @@ let RingMaster(mailbox: Actor<_>) =
                 | CountHops ->
                     hopCount <- hopCount + 1
 
-                | StabilizeRing globalNodesDict ->
+                | StabilizeRing ->
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
                         if key = 0 then
@@ -140,6 +147,15 @@ let RingMaster(mailbox: Actor<_>) =
                     let delay = async { do! Async.Sleep(5000) }
                     Async.RunSynchronously(delay)
                     mailbox.Self <! StabilizeRing
+
+                | StartSearch -> 
+                    nodeSaturationCount <- nodeSaturationCount + 1
+                    localNodeList <- List.sort localNodeList
+                    if nodeSaturationCount = numNodes then
+                        for KeyValue(key, worker) in globalNodesDict do
+                            for numKeys in [1 .. numRequestsPerNode] do
+                                let randomKey = rand.Next(1, (numNodes * numRequestsPerNode))
+                                worker <! FindKey(randomKey, worker, mailbox.Self) 
 
                 | _ -> ()
         with
@@ -208,8 +224,8 @@ let RingWorker (mailbox: Actor<_>) =
                     fingerTable.Add(0, globalNodeDict.[0])
                 // if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
 
-            | DistributeKeys globalKeysList ->
- 
+            | DistributeKeys (globalKeysList, master) ->
+                master <! StartSearch
                 let mutable newKeyList =  []
                 for key in globalKeysList do
                     if (key % numNodes) >= nodeId then
@@ -220,11 +236,11 @@ let RingWorker (mailbox: Actor<_>) =
                 // printfn "kl for node %i is %A" nodeId keysList
                 if newKeyList.Length > 0 then
                     if predecessor.NodeId <> -1 then
-                        predecessor.NodeInstance <! DistributeKeys newKeyList
+                        predecessor.NodeInstance <! DistributeKeys (newKeyList, master)
                     else 
                         if debug then printfn "INFO: Ring is disconnected at %i stabilising" nodeId
                         mailbox.Self <! StabilizeNodeReq
-                        mailbox.Self <! DistributeKeys newKeyList
+                        mailbox.Self <! DistributeKeys (newKeyList, master)
                 if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Length globalKeysList.Length 
             
             | FindKey (keyToFind, requestorRef, master) ->
@@ -232,7 +248,6 @@ let RingWorker (mailbox: Actor<_>) =
                     master <! CountHops 
                     let mutable keyFound = false
                     for keys in keysList do
-                        printfn "search key is %i and local key is %i" keyToFind keys
                         if keyToFind = keys then
                             keyFound <- true
                             requestorRef <! FoundKey (keyToFind, nodeId, master)
@@ -246,7 +261,7 @@ let RingWorker (mailbox: Actor<_>) =
                             if debug then printfn "INFO: key %i not found at last node" keyToFind    
 
             | FoundKey (keyToFind, founderId, master) ->
-                if debug then printfn "Found key %i at node %i" keyToFind founderId
+                printfn "Found key %i at node %i" keyToFind founderId
                 master <! CountSearches
 
             | PrintRing ->
@@ -274,13 +289,14 @@ for nodeId in [0 .. numNodes] do
     worker <! SetNodeId nodeId
     globalNodesDict.Add(nodeId, worker)
 
-master <! JoinRing(0, globalNodesDict)
+master <! InitializeRing globalNodesDict
+master <! JoinRing 0
 
 // Generating a ring linearly by joining nodes
 for nodeId in [numNodes .. -1 .. 1] do
-    master <! JoinRing(nodeId, globalNodesDict)
+    master <! JoinRing nodeId
 
-master <! StabilizeRing globalNodesDict
+master <! StabilizeRing
 
 for KeyValue(key, worker) in globalNodesDict do
     worker <! InitializeFingerTable (master, globalNodesDict)
@@ -289,14 +305,7 @@ System.Threading.Thread.Sleep(500)
 
 let keysList = [0 .. (numNodes * numRequestsPerNode)]
 let lastNode = ([ for KeyValue(key, value) in globalNodesDict do yield key ] |> List.max)
-globalNodesDict.[lastNode] <! DistributeKeys keysList
-
-System.Threading.Thread.Sleep(5000)
-
-for KeyValue(key, worker) in globalNodesDict do
-    for numKeys in [1 .. numRequestsPerNode] do
-        let randomKey = rand.Next(1, (numNodes * numRequestsPerNode))
-        worker <! FindKey(randomKey, worker, master)
+globalNodesDict.[lastNode] <! DistributeKeys (keysList,master)
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
