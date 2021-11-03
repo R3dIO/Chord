@@ -129,7 +129,7 @@ let RingMaster(mailbox: Actor<_>) =
                     if searchCount = (numNodes * numRequestsPerNode) then
                         stopWatch.Stop()
                         printfn "Time for convergence: %f ms" stopWatch.Elapsed.TotalMilliseconds
-                        printfn "Search complete with Total %i hops and Average %i" hopCount ( hopCount / (numNodes*numRequestsPerNode) )
+                        printfn "Search complete with Total %i hops and Average hop count per request %i" hopCount (hopCount/(numNodes*numRequestsPerNode))
                         Environment.Exit(0)
 
                 | CountHops ->
