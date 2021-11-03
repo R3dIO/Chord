@@ -17,6 +17,7 @@ type RingMasterMessage =
     | JoinRing of int * bool
     | StabilizeRing
     | StartSearch
+    | InitializeFingerTable
     | InitializeRing of Dictionary<int,IActorRef>
     | CountSearches
     | CountHops
@@ -27,7 +28,7 @@ type RingWorkerMessage =
     | InitializeKeys of int
     | SetSuccessor of int * IActorRef
     | SetPredecessor of int * IActorRef
-    | InitializeFingerTable of IActorRef * Dictionary<int,IActorRef>
+    | CreateFingerTable of list<int> * Dictionary<int,IActorRef>
     | StabilizeNodeReq
     | GetPredecessor of IActorRef
     | Notify of NodeMetaInfo
@@ -133,7 +134,7 @@ let RingMaster(mailbox: Actor<_>) =
 
                 | CountHops ->
                     hopCount <- hopCount + 1
-
+                
                 | StabilizeRing ->
                     if debug then printfn "INFO: Stabilizing the Ring"
                     for KeyValue(key, worker) in globalNodesDict do
@@ -146,6 +147,10 @@ let RingMaster(mailbox: Actor<_>) =
                     let delay = async { do! Async.Sleep(5000) }
                     Async.RunSynchronously(delay)
                     mailbox.Self <! StabilizeRing
+
+                | InitializeFingerTable ->
+                    for KeyValue(key, worker) in globalNodesDict do
+                        worker <! CreateFingerTable (localNodeList, globalNodesDict)
 
                 | StartSearch -> 
                     nodeSaturationCount <- nodeSaturationCount + 1
@@ -211,9 +216,8 @@ let RingWorker (mailbox: Actor<_>) =
                         successor.NodeInstance <- nextNodePredecessor.NodeInstance 
                         successor.NodeInstance <! SetPredecessor (nodeId, mailbox.Self)
 
-            | InitializeFingerTable (master, globalNodeDict) ->
+            | CreateFingerTable (nodeList, globalNodeDict) ->
                 if debug then printfn "INFO: Initializing Finger Table for %i" nodeId
-                let nodeList = Async.RunSynchronously (master <? GetRingList)
                 
                 for exponent in [0..fingerTableSize] do
                     let mutable nextEntry = nodeId + (pown 2 exponent) - 1
@@ -305,8 +309,7 @@ for nodeId in [numNodes .. -1 .. 1] do
 printfn "Joined all nodes"
 master <! StabilizeRing
 
-for KeyValue(key, worker) in globalNodesDict do
-    worker <! InitializeFingerTable (master, globalNodesDict)
+master <! InitializeFingerTable
 
 let keysList = [0 .. (numNodes * numRequestsPerNode)]
 let lastNode = ([ for KeyValue(key, value) in globalNodesDict do yield key ] |> List.max)
