@@ -72,6 +72,13 @@ let findSuccessor (nodeId:int, nodeList:list<int>) =
     with 
         | :?  System.Collections.Generic.KeyNotFoundException -> 0
 
+let searchFingertable (nodeId:int, nodeList:list<int>) =
+    try
+        let successor = nodeList |> List.sort |> List.find ( fun(elem) -> elem >= nodeId )
+        successor
+    with 
+        | :?  System.Collections.Generic.KeyNotFoundException -> 0
+
 let RandomJoin(maxNodes:int, globalNodesDict: Dictionary<int, IActorRef>, nodeList:ResizeArray<int>, master:IActorRef) = 
     // Select a random node and join it to ring
     for x in [1..maxNodes] do
@@ -246,7 +253,13 @@ for KeyValue(key, worker) in globalNodesDict do
 System.Threading.Thread.Sleep(500)
 
 let keysList = [0 .. numNodes * numRequestsPerNode]
-globalNodesDict.[0] <! DistributeKeys keysList
+let lastNode = ([ for KeyValue(key, value) in globalNodesDict do yield key ] |> List.max)
+globalNodesDict.[lastNode] <! DistributeKeys keysList
+
+// for KeyValue(key, worker) in globalNodesDict do
+//     for numKeys in [1 .. numRequestsPerNode] do
+//         let randomKey = rand.Next(1, (numNodes * numRequestsPerNode))
+//         worker <! FindKey(randomKey, worker, master)
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
