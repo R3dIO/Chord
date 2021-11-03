@@ -14,7 +14,7 @@ type NodeMetaInfo = {
 
 type RingMasterMessage = 
     | FindSuccessor of int
-    | JoinRing of int
+    | JoinRing of int * bool
     | StabilizeRing
     | StartSearch
     | InitializeRing of Dictionary<int,IActorRef>
@@ -40,7 +40,7 @@ let numNodes = fsi.CommandLineArgs.[1] |> int
 let numRequestsPerNode = fsi.CommandLineArgs.[2] |> int
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
-let debug = false
+let debug = true
 let rand = Random()
 
 if numNodes <= 0 || numRequestsPerNode <= 0 then
@@ -112,11 +112,13 @@ let RingMaster(mailbox: Actor<_>) =
                     printfn "Intializing the ring for %i nodes and Fingertable size %i" numNodes fingerTableSize
                     globalNodesDict <- nodeDict
  
-                | JoinRing (nodeId) ->
-                    let successorId = findSuccessor(nodeId, localNodeList)
-                    if debug then printfn "INFO: Found successor %i for %i" successorId nodeId
-                    globalNodesDict.[nodeId] <! SetSuccessor (successorId, globalNodesDict.[successorId])
-                    localNodeList <- localNodeList @ [nodeId]
+                | JoinRing (nodeId, selfjoin) ->
+                    if nodeId > 0 then
+                        if not selfjoin then
+                            let successorId = findSuccessor(nodeId, localNodeList)
+                            if debug then printfn "INFO: Found successor %i for %i" successorId nodeId
+                            globalNodesDict.[nodeId] <! SetSuccessor (successorId, globalNodesDict.[successorId])
+                        localNodeList <- localNodeList @ [nodeId]
 
                 | GetRingList ->
                     response <! localNodeList
@@ -126,7 +128,7 @@ let RingMaster(mailbox: Actor<_>) =
                     if searchCount = (numNodes * numRequestsPerNode) then
                         stopWatch.Stop()
                         printfn "Time for convergence: %f ms" stopWatch.Elapsed.TotalMilliseconds
-                        printfn "Search complete with Total %i hops and Average %i" hopCount (hopCount/(numNodes*numRequestsPerNode))
+                        printfn "Search complete with Total %i hops and Average %i" hopCount ( hopCount / (numNodes*numRequestsPerNode) )
                         Environment.Exit(0)
 
                 | CountHops ->
@@ -287,11 +289,18 @@ for nodeId in [0 .. numNodes] do
     globalNodesDict.Add(nodeId, worker)
 
 master <! InitializeRing globalNodesDict
-master <! JoinRing 0
+master <! JoinRing (0, false)
 
 // Generating a ring linearly by joining nodes
+// for nodeId in [numNodes .. -1 .. 1] do
+//     master <! JoinRing (nodeId, false)
+
 for nodeId in [numNodes .. -1 .. 1] do
-    master <! JoinRing nodeId
+    let nodesList = Async.RunSynchronously(master <? GetRingList)
+    let successorId = findSuccessor(nodeId, nodesList)
+    if debug then printfn "INFO: Found successor %i for %i" successorId nodeId
+    globalNodesDict.[nodeId] <! SetSuccessor (successorId, globalNodesDict.[successorId])
+    master <! JoinRing (nodeId, true)
 
 printfn "Joined all nodes"
 master <! StabilizeRing
