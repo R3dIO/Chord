@@ -13,11 +13,11 @@ type NodeMetaInfo = {
     }
 
 type RingMasterMessage = 
-    | NotifyMaster of int
     | FindSuccessor of int
     | JoinRing of int * Dictionary<int,IActorRef>
     | StabilizeRing of Dictionary<int,IActorRef>
-    | ConvergeRing
+    | CountSearches
+    | CountHops
     | GetRingList
 
 type RingWorkerMessage =
@@ -30,6 +30,8 @@ type RingWorkerMessage =
     | GetPredecessor of IActorRef
     | Notify of NodeMetaInfo
     | DistributeKeys of list<int>
+    | FindKey of int * IActorRef * IActorRef
+    | FoundKey of int * int * IActorRef
     | PrintRing
 
 let numNodes = fsi.CommandLineArgs.[1] |> int
@@ -37,6 +39,7 @@ let numRequestsPerNode = fsi.CommandLineArgs.[2] |> int
 let stopWatch = Diagnostics.Stopwatch()
 let system = ActorSystem.Create("System")
 let debug = true
+let rand = Random()
 
 if numNodes <= 0 || numRequestsPerNode <= 0 then
     printfn "Invalid input"
@@ -72,10 +75,10 @@ let findSuccessor (nodeId:int, nodeList:list<int>) =
     with 
         | :?  System.Collections.Generic.KeyNotFoundException -> 0
 
-let searchFingertable (nodeId:int, nodeList:list<int>) =
+let searchFingertable (keyToFind:int, fingerTable:list<int>) =
     try
-        let successor = nodeList |> List.sort |> List.find ( fun(elem) -> elem >= nodeId )
-        successor
+        let keyNode = fingerTable |> List.sort |> List.find ( fun(nodeId) -> nodeId >= keyToFind )
+        keyNode
     with 
         | :?  System.Collections.Generic.KeyNotFoundException -> 0
 
@@ -96,7 +99,8 @@ let fingerTableSize = divideLoop numNodes
 //-------------------------------------- Master Actor --------------------------------------//
 let RingMaster(mailbox: Actor<_>) =
     
-    let mutable requestCount = 0
+    let mutable searchCount = 0
+    let mutable hopCount = 0
     let mutable localNodeList = []
 
     let rec loop()= actor{
@@ -126,13 +130,16 @@ let RingMaster(mailbox: Actor<_>) =
                     Async.RunSynchronously(delay)
                     mailbox.Self <! StabilizeRing
 
-                | ConvergeRing ->
-                    requestCount <- requestCount + 1
-                    if requestCount = numRequestsPerNode then
+                | CountSearches ->
+                    searchCount <- searchCount + 1
+                    if searchCount = (numNodes * numRequestsPerNode) then
                         stopWatch.Stop()
                         printfn "Time for convergence: %f ms" stopWatch.Elapsed.TotalMilliseconds
-                        printfn "------------- End Transfer -------------"
+                        printfn "Search complete with %i hops" hopCount
                         Environment.Exit(0)
+
+                | CountHops ->
+                    hopCount <- hopCount + 1
 
                 | _ -> ()
         with
@@ -202,7 +209,6 @@ let RingWorker (mailbox: Actor<_>) =
                 // if debug then for entry in fingerTable do printfn "INFO: FingerTable for node %i with Key %i" nodeId entry.Key
 
             | DistributeKeys globalKeysList ->
-                if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Count globalKeysList.Length 
  
                 let mutable newKeyList =  []
                 for key in globalKeysList do
@@ -218,6 +224,28 @@ let RingWorker (mailbox: Actor<_>) =
                         if debug then printfn "INFO: Ring is disconnected at %i stabilising" nodeId
                         mailbox.Self <! StabilizeNodeReq
                         mailbox.Self <! DistributeKeys newKeyList
+
+                if debug then printfn "INFO: Distributing keys at node %i and current key count %i and recived keys %i" nodeId keysList.Count globalKeysList.Length 
+            
+            | FindKey (keyToFind, requestorRef, master) ->
+                    master <! CountHops 
+                    let mutable keyFound = false
+                    for keys in keysList do
+                        if keyToFind = keys then
+                            keyFound <- true
+                            requestorRef <! FoundKey (keyToFind, nodeId, master)
+                    
+                    if not keyFound then 
+                        let ftKeyList = [ for KeyValue(key, value) in fingerTable do yield key ]
+                        let nextNode =  searchFingertable(keyToFind, ftKeyList)
+                        if (nodeId <> 0) && (nextNode = 0) then
+                            fingerTable.[nextNode] <! FindKey (keyToFind, requestorRef, master)
+                        else
+                            if debug then printfn "INFO: key not found at last node"    
+
+            | FoundKey (keyToFind, founderId, master) ->
+                if debug then printfn "Found key %i at node %i" keyToFind founderId
+                master <! CountSearches
 
             | PrintRing ->
                 // if (successor <> 0) then
@@ -261,10 +289,10 @@ let keysList = [0 .. (numNodes * numRequestsPerNode)]
 let lastNode = ([ for KeyValue(key, value) in globalNodesDict do yield key ] |> List.max)
 globalNodesDict.[lastNode] <! DistributeKeys keysList
 
-// for KeyValue(key, worker) in globalNodesDict do
-//     for numKeys in [1 .. numRequestsPerNode] do
-//         let randomKey = rand.Next(1, (numNodes * numRequestsPerNode))
-//         worker <! FindKey(randomKey, worker, master)
+for KeyValue(key, worker) in globalNodesDict do
+    for numKeys in [1 .. numRequestsPerNode] do
+        let randomKey = rand.Next(1, (numNodes * numRequestsPerNode))
+        worker <! FindKey(randomKey, worker, master)
 
 Console.ReadLine() |> ignore
 //-------------------------------------- Main Program --------------------------------------//
