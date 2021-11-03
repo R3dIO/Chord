@@ -63,14 +63,12 @@ let findSuccessorDict (nodeId:int, nodeList:Dictionary<int,_>) =
     if nodeId < numNodes then
         for id in (nodeId + 1) .. numNodes do 
             if nodeList.ContainsKey id && flag then
-                // if debug then printfn "found id %i" id
                 successor <- id
                 flag <- false
     successor 
 
 let findSuccessor (nodeId:int, nodeList:list<int>) =
-    // let successor = nodeList |> List.indexed |> List.find ( fun(index, value) -> index > nodeId && value ) 
-    // fst(successor) 
+    // fst( nodeList |> List.indexed |> List.find ( fun(index, value) -> index > nodeId && value ) )  
     try
         let successor = nodeList |> List.sort |> List.find ( fun(elem) -> elem > nodeId )
         successor
@@ -233,7 +231,6 @@ let RingWorker (mailbox: Actor<_>) =
                     else    
                         newKeyList <- newKeyList @ [key]
 
-                // printfn "kl for node %i is %A" nodeId keysList
                 if newKeyList.Length > 0 then
                     if predecessor.NodeId <> -1 then
                         predecessor.NodeInstance <! DistributeKeys (newKeyList, master)
