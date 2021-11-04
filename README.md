@@ -2,8 +2,8 @@
 Project for COP5615 - Distributed Operating System Principles, Fall 2021
 
 ### Group members:
-1. Anuj Koli
-2. Pratiksha Jain
+1. Anuj Koli 97977572
+2. Pratiksha Jain 96115195
 
 ### Running the project:
 From the directory where Master.fsx exists, run on terminal/command line - 
@@ -23,11 +23,16 @@ and `numRequests` is the number of requests each peer/actor has to make.
 
 ### Results
 
-| NumNodes | NumRequests | Hop Count(avg) |
-|----------|-------------|----------------|
-| 1024     |      16     |      5         |
+| NumNodes | NumRequests | Hop Count(avg) | Time taken to converge in ms |
+|----------|-------------|----------------|------------------------------|
+| 10000    |      64     |      7.64      |     ~260000                  |
+| 8000     |      64     |      7.48      |     ~260000                  |
+| 8000     |      32     |      7.47      |     ~120000                  |
+| 4000     |      32     |      6.98      |     ~36000                   |
+| 1024     |      16     |      6.01      |     ~16000                   |
+| 500      |       8     |      5.5       |     ~15000                   |
+| 100      |       8     |      4.34      |     ~15000                   |
 
 
 #### What is the largest network you managed to deal with
 Largest network we were able to run this network is 1024 with average hop count 5. 
-

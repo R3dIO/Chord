@@ -282,7 +282,7 @@ let RingWorker (mailbox: Actor<_>) =
                             let nextNode =  searchFingertable(keyToFind % numNodes, ftKeyList)
                             if (nodeId = 0) && (nextNode = 0) then
                                 if debug then printfn "INFO: key %i not found at %i and table is %A" keyToFind  nodeId keysList  
-                                // master <! CountSearches
+                                master <! CountSearches
                             else
                                 fingerTable.[nextNode] <! FindKey (keyToFind, requestorRef, master)
 
